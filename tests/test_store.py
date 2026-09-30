@@ -2,7 +2,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from jav.store import Store
 
 
 @pytest.fixture

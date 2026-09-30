@@ -7,7 +7,8 @@ JAV-DESIGN.md section 2.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+import secrets
+from dataclasses import dataclass
 from pathlib import Path
 
 BASE_DIR = Path(os.getenv("JAV_BASE_DIR", "/mnt/data/AV/JAV"))
@@ -34,7 +35,13 @@ MAX_SAME_RUNTIME_JOBS = int(os.getenv("JAV_MAX_SAME_RUNTIME_JOBS", "3"))
 MAX_OTHER_WAIT_S = int(os.getenv("JAV_MAX_OTHER_WAIT_S", "600"))
 QUEUE_DEPTH_LIMIT = int(os.getenv("JAV_QUEUE_DEPTH_LIMIT", "500"))
 BATCH_MAX_JOBS = 64
-ORPHAN_ASSET_TTL_DAYS = 30
+
+# Optional API bearer token (set JAV_API_TOKEN in a systemd drop-in before
+# exposing 8765 through a tunnel; empty = auth disabled, local-only posture).
+API_TOKEN = os.getenv("JAV_API_TOKEN", "")
+# Worker-callback shared secret: per-process random unless pinned via env.
+# /v1/internal/* only accepts requests presenting X-JAV-Callback.
+CALLBACK_SECRET = os.getenv("JAV_CALLBACK_SECRET") or secrets.token_hex(16)
 
 # OOM protection for co-located workloads (unichess training etc.):
 # admission uses live MemAvailable+SwapFree; keep a hard floor so JAV never

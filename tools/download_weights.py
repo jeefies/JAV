@@ -20,7 +20,6 @@ import os
 import shutil
 import sys
 import time
-import urllib.request
 from pathlib import Path
 
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")

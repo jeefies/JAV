@@ -5,7 +5,6 @@ import pytest
 
 from jav.runtime import supervisor as sup_mod
 from jav.scheduler import Scheduler
-from jav.store import Store
 
 from conftest import FakeBackend
 

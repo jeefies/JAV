@@ -1,8 +1,6 @@
 """System API: capabilities / runtime / queue / health."""
 from __future__ import annotations
 
-import platform
-
 from fastapi import APIRouter, Request
 
 from .. import capabilities, config
@@ -47,7 +45,7 @@ async def get_runtime(request: Request):
                 "swap_free_mb": kb.get("SwapFree", 0),
                 "admission_headroom_mb": mem_available_mb()},
         "vram": {"used_by_managed_pids_mb":
-                 vram_pids().get(backend.pid, 0) if backend and backend.pid else 0},
+                 (vram_pids() or {}).get(backend.pid, 0) if backend and backend.pid else 0},
         "streak": ctx.sched.streak,
         "last_switch": sup.last_switch,
         "events": ctx.store.recent_events(15),
@@ -95,6 +93,7 @@ async def health(request: Request):
     ctx = request.app.ctx
     return {
         "status": "healthy", "service": "JAV", "version": VERSION,
+        "auth": "bearer" if config.API_TOKEN else "disabled",
         "state": ctx.sup.state, "active_profile": ctx.sup.active_profile,
         "queued": ctx.store.queued_count(),
         "scheduler_running": not ctx.sched.stopped.is_set(),

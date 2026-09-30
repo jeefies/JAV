@@ -26,6 +26,7 @@ class BaseBackend:
     def __init__(self, profile):
         self.profile = profile
         self.pid: int | None = None
+        self.on_spawn = None  # supervisor hook: called with pid right after Popen
 
     async def start(self):
         raise NotImplementedError

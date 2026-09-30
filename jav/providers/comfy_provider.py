@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 
 from .. import config
 
@@ -24,9 +23,6 @@ def load_pair(provider: str, workflow: str) -> tuple[dict, dict]:
             f"{provider}.{workflow}: workflow template/manifest not installed "
             f"({tpl_path.name}, {man_path.name})")
     return json.loads(tpl_path.read_text()), json.loads(man_path.read_text())
-
-
-_PATH_TOKEN = re.compile(r"\[([^\]]+)\]|\.?([A-Za-z0-9_]+)")
 
 
 def _set_deep(graph: dict, path: str, value) -> None:

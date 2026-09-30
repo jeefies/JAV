@@ -53,6 +53,8 @@ class ComfyBackend(BaseBackend):
             lambda: subprocess.Popen(cmd, cwd=str(config.COMFYUI_DIR),
                                      stdout=self.log_handle, stderr=self.log_handle, env=env))
         self.pid = self.proc.pid
+        if self.on_spawn:
+            self.on_spawn(self.pid)
         deadline = time.monotonic() + self.profile.start_timeout_s
         while time.monotonic() < deadline:
             if self.proc.poll() is not None:

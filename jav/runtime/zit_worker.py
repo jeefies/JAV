@@ -28,6 +28,8 @@ MODEL_DIR = os.getenv("ZIT_MODEL_DIR", "/mnt/data/AV/models/Z-Image-Turbo")
 CALLBACK_URL = os.getenv("JAV_CALLBACK", "http://127.0.0.1:8765/v1/internal/task_complete")
 PIPELINE_STATUS_URL = os.getenv(
     "JAV_PIPELINE_STATUS", "http://127.0.0.1:8765/v1/internal/pipeline_status")
+CALLBACK_SECRET = os.getenv("JAV_CALLBACK_SECRET", "")
+CALLBACK_HEADERS = {"X-JAV-Callback": CALLBACK_SECRET} if CALLBACK_SECRET else {}
 IDLE_TIMEOUT = int(os.getenv("ZIT_WORKER_IDLE_TIMEOUT", "1800"))
 
 logging.basicConfig(
@@ -38,7 +40,7 @@ logger = logging.getLogger("zit_worker")
 
 def send_callback(result):
     try:
-        requests.post(CALLBACK_URL, json=result, timeout=10)
+        requests.post(CALLBACK_URL, json=result, headers=CALLBACK_HEADERS, timeout=10)
     except Exception as e:
         print(f"callback failed: {e}", file=sys.stderr, flush=True)
 
@@ -47,7 +49,7 @@ def send_status(status, **extra):
     try:
         requests.post(PIPELINE_STATUS_URL,
                       json={"status": status, "timestamp": datetime.now().isoformat(), **extra},
-                      timeout=5)
+                      headers=CALLBACK_HEADERS, timeout=5)
     except Exception as e:
         logger.warning(f"status notify failed: {e}")
 

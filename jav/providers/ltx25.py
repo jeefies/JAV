@@ -50,12 +50,16 @@ def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
             gen[k] = generation[k]
     for k in ("width", "height"):
         gen[k] = int(gen[k])
-        if gen[k] % 32:
-            raise ProviderError(f"ltx25: {k} must be a multiple of 32")
+        if gen[k] <= 0 or gen[k] % 32:
+            raise ProviderError(f"ltx25: {k} must be a positive multiple of 32")
     dur, fps = float(gen["duration"]), int(gen["fps"])
     if not (1 <= dur <= 30):
         raise ProviderError("ltx25: duration must be 1..30 s")
+    if fps <= 0 or fps > 120:
+        raise ProviderError("ltx25: fps must be 1..120")
     gen["num_frames"] = 1 + math.floor(dur * fps / 8) * 8
+    if gen["num_frames"] < 9:
+        raise ProviderError("ltx25: duration*fps too small for >=1 sampled frame")
     return {"provider": "ltx25", "workflow": workflow, "mode": mode, "prompt": prompt,
             "bbox_project": bbox_project,
             "negative_prompt": str(inputs.get("negative_prompt",

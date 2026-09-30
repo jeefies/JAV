@@ -10,14 +10,18 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from .. import capabilities, config, providers
 from ..models import BatchSpec, JobSubmit
-from ..store import new_id
+from ..store import TERMINAL
 from ..providers import ProviderError
 
 router = APIRouter(prefix="/v1")
 
 
-def _public(ctx, job: dict) -> dict:
-    outs = ctx.store.get_outputs(job["id"])
+def _public(ctx, job: dict, outs: list[dict] | None = None,
+            qpos: int | None | bool = False) -> dict:
+    if outs is None:
+        outs = ctx.store.get_outputs(job["id"])
+    if qpos is False:
+        qpos = ctx.store.queue_position(job["id"])
     return {
         "id": job["id"], "provider": job["provider"], "workflow": job["workflow"],
         "runtime_profile": job["runtime_profile"], "status": job["status"],
@@ -25,7 +29,7 @@ def _public(ctx, job: dict) -> dict:
         "created_at": job["created_at"], "started_at": job["started_at"],
         "finished_at": job["finished_at"], "error": job["error"],
         "error_type": job["error_type"], "retry_count": job["retry_count"],
-        "queue_position": ctx.store.queue_position(job["id"]),
+        "queue_position": qpos,
         "outputs": [{
             "id": o["id"], "kind": o["kind"], "asset_id": o["asset_id"], "role": o["role"],
             "url": f"/v1/jobs/{job['id']}/output?asset_id={o['id']}",
@@ -126,10 +130,17 @@ async def list_jobs(request: Request, status: str | None = None,
                     runtime_profile: str | None = None, batch_id: str | None = None,
                     provider: str | None = None, limit: int = 100, offset: int = 0):
     ctx = request.app.ctx
+    limit = max(1, min(int(limit), 500))
+    offset = max(0, int(offset))
     res = ctx.store.list_jobs(status=status, runtime_profile=runtime_profile,
                               batch_id=batch_id, provider=provider,
-                              limit=min(limit, 500), offset=offset)
-    return {"total": res["total"], "jobs": [_public(ctx, j) for j in res["jobs"]]}
+                              limit=limit, offset=offset)
+    ids = [j["id"] for j in res["jobs"]]
+    outs_map = ctx.store.outputs_for(ids)
+    qpos_map = ctx.store.queue_positions_for(ids)
+    return {"total": res["total"],
+            "jobs": [_public(ctx, j, outs_map.get(j["id"], []),
+                             qpos_map.get(j["id"], None)) for j in res["jobs"]]}
 
 
 @router.get("/jobs/{job_id}")
@@ -141,21 +152,37 @@ async def get_job(job_id: str, request: Request):
     return _public(ctx, job)
 
 
+async def _cancel_one(ctx, jid: str) -> str:
+    """queued -> immediate cancelled; in-flight -> persisted soft cancel that
+    the scheduler finalizes at its next checkpoint (never silently dropped)."""
+    job = ctx.store.get_job(jid)
+    if not job:
+        return "not_found"
+    if job["status"] in TERMINAL:
+        return job["status"]
+    if ctx.store.cancel_queued(jid):
+        ctx.bus.publish(jid, {"status": "cancelled"})
+        return "cancelled"
+    ctx.store.request_cancel(jid)
+    if job["status"] == "running" and ctx.sup.backend:
+        await ctx.sup.backend.cancel(jid)
+    return "cancelling"
+
+
 @router.delete("/jobs/{job_id}")
 async def cancel_job(job_id: str, request: Request):
     ctx = request.app.ctx
     job = ctx.store.get_job(job_id)
     if not job:
         raise HTTPException(404, detail="job not found")
-    if job["status"] in ("completed", "failed", "cancelled"):
+    if job["status"] in TERMINAL:
         raise HTTPException(409, detail=f"job already {job['status']}")
-    if ctx.store.cancel_queued(job_id):
-        ctx.bus.publish(job_id, {"status": "cancelled"})
-        return {"id": job_id, "status": "cancelled"}
-    # running: best-effort interrupt, finalized on callback (soft cancel)
-    if ctx.sup.backend:
-        await ctx.sup.backend.cancel(job_id)
-    return {"id": job_id, "status": "cancelling"}
+    result = await _cancel_one(ctx, job_id)
+    if result == "not_found":
+        raise HTTPException(404, detail="job not found")
+    if result in ("completed", "failed"):  # raced to terminal between the checks
+        raise HTTPException(409, detail=f"job already {result}")
+    return {"id": job_id, "status": result}
 
 
 @router.get("/jobs/{job_id}/outputs")
@@ -197,7 +224,7 @@ async def job_events(job_id: str, request: Request):
         try:
             cur = ctx.store.get_job(job_id)
             yield f"event: status\ndata: {json.dumps({'status': cur['status']})}\n\n"
-            if cur["status"] in ("completed", "failed", "cancelled"):
+            if cur["status"] in TERMINAL:
                 return
             waited = 0.0
             while True:
@@ -211,7 +238,7 @@ async def job_events(job_id: str, request: Request):
                     continue
                 waited = 0.0
                 yield f"event: status\ndata: {json.dumps(ev, default=str)}\n\n"
-                if ev.get("status") in ("completed", "failed", "cancelled"):
+                if ev.get("status") in TERMINAL:
                     break
         finally:
             ctx.bus.unsubscribe(job_id, q)
@@ -236,21 +263,23 @@ async def cancel_batch(batch_id: str, request: Request):
         raise HTTPException(404, detail="batch not found")
     result = {}
     for jid in b["jobs"]:
-        job = ctx.store.get_job(jid)
-        if job["status"] in ("completed", "failed", "cancelled"):
-            result[jid] = job["status"]
-        elif ctx.store.cancel_queued(jid):
-            result[jid] = "cancelled"
-        else:
-            if ctx.sup.backend:
-                await ctx.sup.backend.cancel(jid)
-            result[jid] = "cancelling"
+        result[jid] = await _cancel_one(ctx, jid)
     return {"batch_id": batch_id, "result": result}
 
 
 # ---------------- internal worker callbacks ----------------
+# Shared-secret gated: only the supervisor-spawned worker knows the value
+# (env JAV_CALLBACK_SECRET). These endpoints read/move files on behalf of a
+# job, so they must never be callable by API clients — including anyone
+# reaching this port through a tunnel.
+def _check_callback(request: Request):
+    if request.headers.get("x-jav-callback", "") != config.CALLBACK_SECRET:
+        raise HTTPException(403, detail="invalid worker callback secret")
+
+
 @router.post("/internal/task_complete")
 async def task_complete(request: Request):
+    _check_callback(request)
     ctx = request.app.ctx
     payload = await request.json()
     return {"handled": ctx.sup.deliver(payload)}
@@ -258,6 +287,7 @@ async def task_complete(request: Request):
 
 @router.post("/internal/pipeline_status")
 async def pipeline_status(request: Request):
+    _check_callback(request)
     ctx = request.app.ctx
     payload = await request.json()
     return {"handled": ctx.sup.pipeline_status(payload)}

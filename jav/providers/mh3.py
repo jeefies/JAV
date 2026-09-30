@@ -67,16 +67,28 @@ def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
            "steps": 20 if workflow in ("fun_control", "multiframe") else 4,
            "strength": 1.0 if workflow == "fun_control" else 0.7,
            "seed": int(generation.get("seed", -1))}
+    if workflow == "fun_control" and inputs.get("control_strength") is not None:
+        # documented in API.md: inputs.control_strength (generation.strength
+        # below still wins when both are given)
+        try:
+            cs = float(inputs["control_strength"])
+        except (TypeError, ValueError):
+            raise ProviderError("mh3.fun_control: control_strength must be numeric")
+        if not (0.0 <= cs <= 2.0):
+            raise ProviderError("mh3.fun_control: control_strength must be 0..2")
+        gen["strength"] = cs
     for k in ("width", "height", "duration", "fps", "steps", "strength"):
         if k in generation:
             gen[k] = generation[k]
     for k in ("width", "height"):
         gen[k] = int(gen[k])
-        if gen[k] % 32:
-            raise ProviderError(f"mh3: {k} must be a multiple of 32")
+        if gen[k] <= 0 or gen[k] % 32:
+            raise ProviderError(f"mh3: {k} must be a positive multiple of 32")
     dur = float(gen["duration"])
     if not (1 <= dur <= 15):
         raise ProviderError("mh3: duration must be 1..15 s")
+    if int(gen["fps"]) <= 0 or int(gen["fps"]) > 60:
+        raise ProviderError("mh3: fps must be 1..60")
     turbo = bool(inputs.get("turbo"))
     if turbo:
         if workflow not in TURBO_STEPS:

@@ -10,17 +10,52 @@ import json
 import os
 import sys
 import time
+import urllib.error
+import urllib.request
 
 sys.path.insert(0, "/mnt/data/AV/JAV")
 
-from jav import capabilities, providers
+from jav import capabilities, config, providers
 from jav.runtime.supervisor import Supervisor
 from jav.scheduler import Scheduler
 from jav.store import Store
 
 
+def _guard_single_runtime():
+    """The single-runtime invariant is a PER-PROCESS asyncio lock: running
+    this tool beside the live service would start a second heavyweight
+    runtime (the documented dual-worker OOM incident). Refuse unless the
+    service is down, and hold an exclusive lockfile meanwhile."""
+    try:
+        urllib.request.urlopen(
+            f"http://127.0.0.1:{config.SERVICE_PORT}/v1/health", timeout=3).read()
+        sys.exit("first_validation REFUSED: JAV service is LIVE on "
+                 f":{config.SERVICE_PORT}. Stop it first: systemctl --user stop JAV.service")
+    except urllib.error.URLError:
+        pass
+    lock = config.DATA_DIR / ".first_validation.lock"
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            other = int(lock.read_text().strip())
+            os.kill(other, 0)
+            sys.exit(f"first_validation REFUSED: another run (pid {other}) holds {lock}")
+        except (ValueError, ProcessLookupError, PermissionError, FileNotFoundError):
+            lock.unlink(missing_ok=True)  # stale lock from a dead run
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    os.write(fd, str(os.getpid()).encode())
+    os.close(fd)
+
+    import atexit
+    atexit.register(lambda: lock.unlink(missing_ok=True))
+
+
 async def main():
     provider, workflow, spec_file = sys.argv[1], sys.argv[2], sys.argv[3]
+    config.ensure_dirs()
+    _guard_single_runtime()
     store = Store()
     spec = json.load(open(spec_file))
 
@@ -29,10 +64,10 @@ async def main():
         import hashlib
         import os as _os
         from jav import config
+        from jav.models import EXT_KIND
         sha = hashlib.sha256(data).hexdigest()
         ext = _os.path.splitext(p)[1] or ".bin"
-        kind = {".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image",
-                ".mp4": "video", ".mov": "video", ".wav": "audio", ".mp3": "audio"}.get(ext, "file")
+        kind = EXT_KIND.get(ext.lower(), "file")
         d = config.ASSETS_DIR / sha[:2]
         d.mkdir(parents=True, exist_ok=True)
         dest = d / f"{sha[:24]}{ext}"

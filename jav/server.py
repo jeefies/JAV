@@ -3,11 +3,11 @@
 uvicorn --workers 1 keeps the scheduler singleton; HTTP layer is async."""
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from fastapi import FastAPI
+from starlette.responses import JSONResponse
 
 from . import config
 from .api import routers
@@ -49,6 +49,17 @@ def create_app(profiles: dict | None = None, store: Store | None = None,
     app = FastAPI(title="JAV — Jeefy Audio-Video Generation Platform",
                   version="0.1.0", lifespan=lifespan)
     app.ctx = Ctx(store=store, sup=sup, sched=sched, bus=bus)
+    if config.API_TOKEN:
+        @app.middleware("http")
+        async def bearer_auth(request, call_next):
+            path = request.url.path
+            if (request.method == "GET" or path == "/v1/health"
+                    or path.startswith("/v1/internal/")):
+                return await call_next(request)
+            if request.headers.get("authorization", "") != f"Bearer {config.API_TOKEN}":
+                return JSONResponse({"detail": "invalid or missing bearer token"},
+                                    status_code=401)
+            return await call_next(request)
     for r in routers:
         app.include_router(r)
     return app

@@ -25,8 +25,6 @@ config.ZIT_WEIGHTS_DIR = config.DATA_DIR / "fake_zit_weights"
 config.ZIT_WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
 (config.ZIT_WEIGHTS_DIR / "model_index.json").write_text("{}")
 
-from jav.capabilities import FLAGS_FILE  # noqa: E402  (module-level bound)
-
 config.OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -38,7 +36,6 @@ class FakeBackend:
     release = False
 
     def __init__(self, profile):
-        from jav.runtime.base import BaseBackend
         self.profile = profile
         self.pid = 999999
         self.mode = FakeBackend.default_mode
@@ -62,6 +59,9 @@ class FakeBackend:
         if self.mode == "fail":
             return {"status": "failed", "paths": [], "error": "fake fail",
                     "error_type": "generation_error"}
+        if self.mode == "oom":
+            return {"status": "failed", "paths": [], "error": "fake vram OOM",
+                    "error_type": "oom_error"}
         if self.mode == "crash":
             from jav.runtime.base import BackendCrash
             raise BackendCrash("fake crash")

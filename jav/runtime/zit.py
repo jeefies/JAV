@@ -6,15 +6,10 @@ import asyncio
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
-
-import requests
 
 from .. import config
 from .base import BaseBackend, BackendCrash, StartTimeout, _await_sync
-
-MARKER = "jav.runtime.zit_worker"
 
 
 class ZitBackend(BaseBackend):
@@ -44,6 +39,7 @@ class ZitBackend(BaseBackend):
             "ZIT_MODEL_DIR": str(model_dir),
             "JAV_CALLBACK": f"http://127.0.0.1:{config.SERVICE_PORT}/v1/internal/task_complete",
             "JAV_PIPELINE_STATUS": f"http://127.0.0.1:{config.SERVICE_PORT}/v1/internal/pipeline_status",
+            "JAV_CALLBACK_SECRET": config.CALLBACK_SECRET,
             "ZIT_WORKER_IDLE_TIMEOUT": str(max(self.profile.idle_unload_s + 300, 1800)),
             "CUDA_VISIBLE_DEVICES": os.getenv("JAV_GPU_INDEX", "0"),
         })
@@ -54,6 +50,8 @@ class ZitBackend(BaseBackend):
                 stdout=self.log_handle, stderr=self.log_handle, env=env,
                 cwd=str(config.BASE_DIR)))
         self.pid = self.proc.pid
+        if self.on_spawn:
+            self.on_spawn(self.pid)
         try:
             await asyncio.wait_for(self._loaded.wait(), timeout=self.profile.start_timeout_s)
         except asyncio.TimeoutError:
@@ -129,6 +127,8 @@ class ZitBackend(BaseBackend):
             self._resolve(payload)
             return True
         self._unowned.append(payload)
+        if len(self._unowned) > 100:  # bounded: forged/late callbacks cannot grow it
+            self._unowned.pop(0)
         return True
 
     def pipeline_status(self, payload: dict) -> bool:

@@ -3,6 +3,8 @@ exists + operator flag. Interface existing != hardware validated."""
 from __future__ import annotations
 
 import json
+import os
+import threading
 from pathlib import Path
 
 from . import config
@@ -16,15 +18,55 @@ IMPLEMENTED = {"zit.t2i", "zit.i2i", "zit.inpaint",
 
 # Workflows that passed a real-hardware smoke test (recorded, not inferred).
 FLAGS_FILE = Path(config.DATA_DIR) / "capability_flags.json"
+_LAST_GOOD_FLAGS: dict | None = None
 
 
 def _load_flags() -> dict:
+    global _LAST_GOOD_FLAGS
     if FLAGS_FILE.exists():
         try:
-            return json.loads(FLAGS_FILE.read_text())
+            flags = json.loads(FLAGS_FILE.read_text())
+            _LAST_GOOD_FLAGS = flags
+            return flags
         except Exception:
+            if _LAST_GOOD_FLAGS is not None:
+                return _LAST_GOOD_FLAGS  # torn/corrupt write: keep last good
             return {}
     return {}
+
+
+def _mh3_template_files(profile: str) -> set[str]:
+    """Every .safetensors actually referenced by the profile's workflow
+    templates (vae_name/unet_name/clip_name/lora_name). The weight gate is
+    DERIVED from the graphs so it can never green-light a workflow whose
+    loader target was purged (gate vs template drift)."""
+    keys = ("vae_name", "unet_name", "clip_name", "lora_name")
+    names: set[str] = set()
+    for wf, prof in PROVIDER_WORKFLOWS.get("mh3", {}).items():
+        if prof != profile:
+            continue
+        tpl = config.BASE_DIR / "jav" / "workflows" / "mh3" / f"{wf}.api.json"
+        if not tpl.exists():
+            continue
+        try:
+            graph = json.loads(tpl.read_text())
+        except Exception:
+            continue
+        stack = [graph]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    if isinstance(v, str) and k in keys and v.endswith(".safetensors"):
+                        names.add(v)
+                    elif isinstance(v, (dict, list)):
+                        stack.append(v)
+            elif isinstance(node, list):
+                stack.extend(n for n in node if isinstance(n, (dict, list)))
+    return names
+
+
+_MH3_MODEL_SUBDIRS = ("diffusion_models", "text_encoders", "vae", "loras", "checkpoints")
 
 
 def _weights_for(profile: str) -> tuple[bool, str]:
@@ -46,11 +88,14 @@ def _weights_for(profile: str) -> tuple[bool, str]:
     if profile.startswith("mh3"):
         kind = "ref2va" if profile.endswith("ref2va") else "fl2va"
         m = config.COMFYUI_DIR / "models"
-        need = [m / "diffusion_models" / f"minimax_h3_{kind}_pruned_int8_convrot.safetensors",
-                m / "text_encoders" / "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-                m / "vae" / "minimax_h3_video_vae_int8_convrot.safetensors",
-                m / "vae" / "minimax_h3_audio_vae_fp32.safetensors"]
-        missing = [p.name for p in need if not p.exists()]
+        need = {f"minimax_h3_{kind}_pruned_int8_convrot.safetensors",
+                "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                "minimax_h3_audio_vae_fp32.safetensors"}
+        need |= _mh3_template_files(profile)
+        from .providers.mh3 import TURBO_LORA  # code-injected loras, not in templates
+        need |= set(TURBO_LORA.values())
+        missing = [n for n in sorted(need)
+                   if not any((m / sub / n).exists() for sub in _MH3_MODEL_SUBDIRS)]
         return not missing, f"MiniMax H3 {kind} weights missing {missing}"
     return False, "unknown profile"
 
@@ -88,9 +133,17 @@ def is_available(provider: str, workflow: str) -> tuple[bool, str]:
     return entry["available"], entry.get("reason", "")
 
 
+_FLAGS_LOCK = threading.Lock()
+
+
 def mark_validated(provider: str, workflow: str):
     """Called after a successful real smoke test of a workflow."""
-    flags = _load_flags()
-    flags[f"{provider}.{workflow}"] = True
-    FLAGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    FLAGS_FILE.write_text(json.dumps(flags, indent=1))
+    global _LAST_GOOD_FLAGS
+    with _FLAGS_LOCK:  # serialize read-modify-write (no lost updates in-proc)
+        flags = _load_flags()
+        flags[f"{provider}.{workflow}"] = True
+        FLAGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = FLAGS_FILE.with_name(f".flags.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(flags, indent=1))
+        os.replace(tmp, FLAGS_FILE)  # atomic: readers never see a torn file
+        _LAST_GOOD_FLAGS = flags

@@ -13,6 +13,12 @@ class ProviderError(ValueError):
         super().__init__(msg)
         self.status = status
 
+# Single ext->asset-kind map, shared by upload ingest and output ingest.
+EXT_KIND = {".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image",
+            ".bmp": "image", ".gif": "image", ".mp4": "video", ".mov": "video",
+            ".webm": "video", ".mkv": "video", ".mp3": "audio", ".wav": "audio",
+            ".flac": "audio", ".ogg": "audio"}
+
 PROVIDER_WORKFLOWS: dict[str, dict[str, str]] = {
     "zit": {"t2i": "zit", "i2i": "zit", "inpaint": "zit"},
     "mh3": {"t2v": "mh3.fl2va", "i2v": "mh3.fl2va", "fl2v": "mh3.fl2va",

@@ -6,7 +6,6 @@ strength in the i2i cache key).
 """
 from __future__ import annotations
 
-from .. import config
 from ..store import cache_hash
 
 DEFAULTS = {
@@ -17,7 +16,6 @@ DEFAULTS = {
     "strength": 0.8,
     "negative_prompt": "",
 }
-IMAGE_EXT = {"image/png", "image/jpeg", "image/webp", "image/bmp"}
 
 
 def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
@@ -52,10 +50,6 @@ def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
         "negative_prompt": str(inputs.get("negative_prompt", gen["negative_prompt"])),
         "generation": gen, "assets": assets,
     }
-
-
-def asset_ids(payload: dict) -> list[str]:
-    return list(payload["assets"].values())
 
 
 def cache_key(payload: dict) -> str | None:

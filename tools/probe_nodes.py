@@ -2,7 +2,6 @@
 Read-only discovery for building workflow templates."""
 import asyncio
 import sys
-import time
 
 import requests
 

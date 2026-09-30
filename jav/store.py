@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS jobs(
   cache_key TEXT,
   created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT,
   error TEXT, error_type TEXT, retry_count INTEGER DEFAULT 0,
-  external_ref TEXT
+  external_ref TEXT, cancel_requested INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_sched ON jobs(status, runtime_profile, priority DESC, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_cache ON jobs(cache_key, status);
@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS runtime_events(
 """
 
 TERMINAL = ("completed", "failed", "cancelled")
+SCHEMA_VERSION = 1
 
 
 def now() -> str:
@@ -71,7 +72,23 @@ class Store:
         self._conn.executescript(SCHEMA)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self):
+        """PRAGMA user_version migration ladder (idempotent, additive-only)."""
+        ver = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        if ver > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"jav.db schema version {ver} is newer than supported "
+                f"{SCHEMA_VERSION}; upgrade the JAV service before starting")
+        if ver < 1:
+            try:
+                self._conn.execute(
+                    "ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass  # fresh DB already has the column via SCHEMA
+            self._conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def close(self):
         with self._lock:
@@ -218,7 +235,7 @@ class Store:
     def recover_interrupted(self) -> list[str]:
         """Crash recovery: in-flight -> queued (JAV-DESIGN 4.1)."""
         rows = self._rows(
-            "SELECT id FROM jobs WHERE status IN ('starting_runtime','running','postprocessing')")
+            "SELECT id FROM jobs WHERE status IN ('starting_runtime','running')")
         ids = [r["id"] for r in rows]
         if ids:
             q = ",".join("?" * len(ids))
@@ -232,6 +249,19 @@ class Store:
             "UPDATE jobs SET status='cancelled', finished_at=? WHERE id=? AND status='queued'",
             (now(), job_id))
         return r.rowcount > 0
+
+    def request_cancel(self, job_id: str) -> bool:
+        """Persist a soft cancel for in-flight jobs; the scheduler observes
+        the flag at its next checkpoint and finalizes to 'cancelled'."""
+        r = self._exec(
+            "UPDATE jobs SET cancel_requested=1 WHERE id=? "
+            "AND status IN ('starting_runtime','running') AND cancel_requested=0",
+            (job_id,))
+        return r.rowcount > 0
+
+    def cancel_requested(self, job_id: str) -> bool:
+        r = self._one("SELECT cancel_requested FROM jobs WHERE id=?", (job_id,))
+        return bool(r and r["cancel_requested"])
 
     # ---------- batches ----------
     def create_batch(self, client_ref: str | None, meta: dict | None) -> dict:
@@ -282,6 +312,46 @@ class Store:
     def get_outputs(self, job_id: str) -> list[dict]:
         return self._rows("SELECT * FROM outputs WHERE job_id=? ORDER BY created_at", (job_id,))
 
+    def outputs_for(self, job_ids: list[str]) -> dict[str, list[dict]]:
+        """Batch variant of get_outputs (avoids N+1 on list endpoints)."""
+        if not job_ids:
+            return {}
+        out: dict[str, list[dict]] = {jid: [] for jid in job_ids}
+        q = ",".join("?" * len(job_ids))
+        for r in self._rows(
+                f"SELECT * FROM outputs WHERE job_id IN ({q}) ORDER BY created_at",
+                tuple(job_ids)):
+            out.setdefault(r["job_id"], []).append(r)
+        return out
+
+    def queue_positions_for(self, job_ids: list[str]) -> dict[str, int]:
+        """Batch queue positions: one scan of the queued set."""
+        targets = set(job_ids)
+        rows = self._rows(
+            "SELECT id, priority, created_at FROM jobs WHERE status='queued'")
+        by_id = {r["id"]: r for r in rows}
+        out: dict[str, int] = {}
+        for jid in job_ids:
+            j = by_id.get(jid)
+            if not j:
+                continue
+            ahead = sum(1 for r in rows
+                        if r["priority"] > j["priority"]
+                        or (r["priority"] == j["priority"] and r["created_at"] < j["created_at"]))
+            out[jid] = ahead + 1
+        return out
+
+    def asset_references(self, asset_id: str) -> dict:
+        """Active-job + output references that block asset deletion."""
+        o = self._one("SELECT COUNT(*) n FROM outputs WHERE asset_id=?", (asset_id,))
+        pattern = f'%"{asset_id}"%'
+        q = ",".join("?" * len(TERMINAL))
+        j = self._one(
+            f"SELECT COUNT(*) n FROM jobs WHERE status NOT IN ({q}) "
+            "AND (assets LIKE ? OR payload LIKE ?)",
+            (*TERMINAL, pattern, pattern))
+        return {"outputs": o["n"] if o else 0, "active_jobs": j["n"] if j else 0}
+
     # ---------- events ----------
     def log_event(self, profile_from: str | None, profile_to: str | None,
                   reason: str, duration_ms: int | None = None,
@@ -296,9 +366,9 @@ class Store:
             "SELECT * FROM runtime_events ORDER BY id DESC LIMIT ?", (limit,))
 
     # ---------- runtime state persistence (crash sweep) ----------
-    def save_runtime_state(self, pid: int, profile: str):
+    def save_runtime_state(self, pid: int, profile: str, start_time: int | None = None):
         (config.DATA_DIR / "runtime.state").write_text(json.dumps(
-            {"pid": pid, "profile": profile, "ts": now()}))
+            {"pid": pid, "profile": profile, "start_time": start_time, "ts": now()}))
 
     def load_runtime_state(self) -> dict | None:
         p = config.DATA_DIR / "runtime.state"

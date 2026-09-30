@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
+import os
 import shutil
 import time
 from datetime import datetime
@@ -12,10 +12,9 @@ from datetime import timezone as datetime_timezone
 from pathlib import Path
 
 from . import capabilities, config, providers
-from .models import PROVIDER_WORKFLOWS
+from .models import EXT_KIND
 from .runtime.base import BackendCrash
 from .runtime.supervisor import AdmissionDenied
-from .store import cache_hash, now
 
 
 class EventBus:
@@ -147,6 +146,9 @@ class Scheduler:
         payload = job["payload"]
         payload["job_id"] = job["id"]
         profile_name = job["runtime_profile"]
+        if self.store.cancel_requested(job["id"]):
+            self._finish(job["id"], "cancelled", error="cancelled by user")
+            return
         try:
             slots = providers.asset_slots(payload)
             paths = {}
@@ -181,6 +183,10 @@ class Scheduler:
         self._backoff.pop(profile_name, None)
         self._backoff_attempts.pop(profile_name, None)
 
+        if self.store.cancel_requested(job["id"]):
+            self._finish(job["id"], "cancelled", error="cancelled by user")
+            return
+
         self.store.set_status(job["id"], "running")
         self.bus.publish(job["id"], {"status": "running"})
         timeout = self.sup.profiles[profile_name].job_timeout_s
@@ -202,14 +208,15 @@ class Scheduler:
             return
 
         self.sup.job_finished()
-        if result.get("cancel_requested"):
+        if result.get("cancel_requested") or self.store.cancel_requested(job["id"]):
             for p in result.get("paths", []):
                 Path(p).unlink(missing_ok=True)
             self._finish(job["id"], "cancelled", error="cancelled by user")
             return
         if result.get("status") == "success":
             try:
-                self._ingest_outputs(job["id"], result.get("paths", []))
+                await asyncio.to_thread(self._ingest_outputs, job["id"],
+                                        result.get("paths", []))
             except Exception as e:
                 await self._fail_or_retry(job, f"output ingest failed: {e}", "ingest_error")
                 return
@@ -228,6 +235,9 @@ class Scheduler:
         return seq[min(attempts - 1, len(seq) - 1)]
 
     async def _fail_or_retry(self, job: dict, error: str, error_type: str):
+        if self.store.cancel_requested(job["id"]):
+            self._finish(job["id"], "cancelled", error="cancelled by user")
+            return
         if job["retry_count"] < 1 and error_type in RETRYABLE_ERRORS:
             self.store.update_job(job["id"], retry_count=job["retry_count"] + 1)
             self.store.set_status(job["id"], "queued")
@@ -238,25 +248,31 @@ class Scheduler:
         self._finish(job["id"], "failed", error=error[:500], error_type=error_type)
 
     def _ingest_outputs(self, job_id: str, paths: list[str]):
+        # Callback/graph outputs arrive as filesystem paths: ONLY paths under
+        # managed output roots are ever read, moved or registered. This is the
+        # containment line against forged /v1/internal/task_complete payloads.
+        roots = [(config.DATA_DIR / "pending").resolve(),
+                 config.OUTPUTS_DIR.resolve(),
+                 (config.COMFYUI_DIR / "output").resolve()]
         for p in paths:
-            src = Path(p)
-            if not src.exists():
+            rp = Path(p).resolve()
+            if not any(rp == r or rp.is_relative_to(r) for r in roots):
+                raise ValueError(f"output path outside managed dirs: {p!r}")
+            if not rp.exists():
                 continue
-            data = src.read_bytes()
-            sha = hashlib.sha256(data).hexdigest()
-            ext = src.suffix or ".bin"
-            kind = {".png": "image", ".jpg": "image", ".jpeg": "image",
-                    ".webp": "image", ".mp4": "video", ".mov": "video",
-                    ".webm": "video", ".mp3": "audio", ".wav": "audio",
-                    ".flac": "audio"}.get(ext.lower(), "file")
+            with open(rp, "rb") as fh:
+                sha = hashlib.file_digest(fh, "sha256").hexdigest()
+            size = os.path.getsize(rp)
+            ext = rp.suffix or ".bin"
+            kind = EXT_KIND.get(ext.lower(), "file")
             dest_dir = config.OUTPUTS_DIR / sha[:2]
             dest_dir.mkdir(parents=True, exist_ok=True)
             dest = dest_dir / f"{sha[:24]}{ext}"
             if not dest.exists():
-                shutil.move(str(src), dest)
+                shutil.move(str(rp), dest)
             else:
-                src.unlink()
-            asset = self.store.put_asset(sha256=sha, kind=kind, path=str(dest), size=len(data))
+                rp.unlink()
+            asset = self.store.put_asset(sha256=sha, kind=kind, path=str(dest), size=size)
             self.store.add_output(job_id, kind, asset["id"], str(dest), role="main")
 
     def _finish(self, job_id: str, status: str, **extra):

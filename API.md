@@ -3,6 +3,17 @@
 服务：`127.0.0.1:8765`（经 `ZIT-tunnel` 暴露为远端 `3001`）。
 所有任务/资产响应使用 `id` 字段。输入媒体一律走 asset 上传，任务体只引用 `asset_id`。
 
+## 鉴权（隧道暴露前必读）
+
+- 设置环境变量 `JAV_API_TOKEN`（systemd drop-in）后，**所有非 GET 端点**要求
+  `Authorization: Bearer <token>`，否则 401；GET 与 `/v1/health` 保持开放
+  （`/v1/health` 响应中 `auth` 字段指示当前模式）。未设置 = 本地信任模式（仅适合
+  纯回环使用）。SDK 已内置 `token=` 参数。
+- `/v1/internal/*`（worker 回调）**永不**走 API token：要求
+  `X-JAV-Callback: <JAV_CALLBACK_SECRET>`（默认每进程随机，经 env 注入 worker）。
+  任何客户端（含隧道对端）伪造回调都会被 403 拒绝；回调携带的文件路径还受
+  托管目录白名单（pending / outputs / ComfyUI output）二次约束。
+
 ## 概念
 
 - **provider**：`zit` | `ltx25` | `mh3`
@@ -82,7 +93,12 @@
 
 ### DELETE /v1/jobs/{id}
 - 排队中 → `{"status":"cancelled"}` 立即生效
-- 运行中 → `{"status":"cancelling"}`（ComfyUI 走 /interrupt；ZIT 跑完当前图后丢弃结果）
+- 启动中/运行中 → `{"status":"cancelling"}`：取消意图**持久化**（`cancel_requested`），
+  调度器在下一个检查点（提交前 / 结果落地前 / 失败重试前）落定为
+  `cancelled` 并丢弃产物——不会出现“已接受取消但任务照常完成”。
+  ComfyUI 侧同时 best-effort `/interrupt`
+- 已在终态 → 409
+- `GET /v1/jobs`：`limit` 钳制在 1..500，`offset` ≥0（越界参数自动修正而非透传 SQL）
 
 ### GET /v1/jobs/{id}/outputs · GET /v1/jobs/{id}/output?asset_id=
 列表 / 直接下载产物文件（content-addressed，可长期缓存）。
@@ -99,9 +115,12 @@
 - **raw-body 上传**：请求体即文件字节；`x-filename` 头可选（用于推断 kind/扩展名）
 - 或 `POST /v1/assets/upload?kind=` multipart（字段名 `file`）
 - 201 → `{"id":"asset_...", "type":"image", "sha256":"...", "size":n}`
-- SHA-256 去重：相同字节返回同一 `id`；上限 2GiB/文件
+- SHA-256 去重：相同字节返回同一 `id`；上限 2GiB/文件（**流式**落盘 +
+  `Content-Length` 预检 + 传输中超限即 413，不整读进内存）
 
 ### GET /v1/assets/{id} · DELETE /v1/assets/{id}
+- DELETE 有引用保护：被非终态任务或已记录输出引用的资产返回 **409**，
+  不会静默删除在途/可下载文件
 
 ## 系统
 - `GET /v1/capabilities` — 每个 workflow 的 `available` 由
@@ -123,16 +142,28 @@
   绝不在任务中途切换 runtime
 - 准入（OOM 防护）：启动 runtime 前要求实时
   `MemAvailable+SwapFree ≥ RAM 预算 + 4G 地板` 且 `VRAM free ≥ 显存预算`，
-  不满足则任务保持 queued 指数退避（15s→4min）
+  不满足则任务保持 queued 指数退避（15s→4min）。VRAM 探针失败（nvidia-smi
+  异常/驱动挂死）时**拒绝准入**而非放行（fail-closed）；仅
+  `JAV_VRAM_GATE=off` 显式绕过
 - 空闲卸载：runtime 无任务超过 `idle_unload_s`（zit 默认 **300s**，可用
   `JAV_ZIT_IDLE_UNLOAD_S` 调整）后自动 STOPPED 释放约 20G RAM + 全部显存；
   不等的话可随时 `POST /v1/runtime/unload` 手动释放。空闲后的首个任务会
   多付约 60–90s 权重加载时间（页缓存预热后可接受）。
 - 失败重试：runtime 崩溃/超时/OOM 自动重入队一次；确定性参数错误不重试
 
-## 内部端点（仅本机回环，勿外部调用）
-- `POST /v1/internal/task_complete` — worker 任务结果回调
+## 内部端点（仅 worker 回调，须 `X-JAV-Callback` 秘密头）
+- `POST /v1/internal/task_complete` — worker 任务结果回调（路径限
+  pending/outputs/ComfyUI output 三个托管目录）
 - `POST /v1/internal/pipeline_status` — worker 加载/卸载状态回调
+
+## 部署可靠性
+- systemd：`StartLimitIntervalSec=600` / `StartLimitBurst=3`，持续失败会
+  park 服务（不再无限 5s 重启循环；循环会反复重跑孤儿进程清扫）
+- 孤儿清扫：runtime.state 在**子进程 Popen 瞬间**记录 pid + starttime；
+  清扫必须同时匹配记录的 profile 脚本全路径与进程启动时刻，PID 复用不会
+  误杀无关进程
+- `tools/first_validation.py` 与在线服务互斥：检测到 `:8765` 存活即拒绝
+  运行，并用 `data/.first_validation.lock` 防双实例（避免双 runtime OOM）
 
 ## 兼容说明
 旧 ZIT-service `/v1/tasks` 系列**未保留**（用户决策 2026-09-29：JAV 完成后

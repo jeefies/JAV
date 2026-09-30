@@ -3,6 +3,10 @@ Description=JAV - Jeefy Audio-Video Generation Platform
 Documentation=file:///mnt/data/AV/JAV-DESIGN.md
 After=network-online.target
 Wants=network-online.target
+# crash-loop protection: park the service after 3 failures in 10 min
+# (each restart re-runs the orphan sweep + crash recovery; never loop that)
+StartLimitIntervalSec=600
+StartLimitBurst=3
 
 [Service]
 Type=simple

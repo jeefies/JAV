@@ -34,13 +34,22 @@
 - 修改 profile 预算：`jav/config.py`（默认值）或 `config/profiles.yaml`（覆盖）。
 - 服务：`systemctl --user {start|restart|status} JAV.service`；
   unit 在 `deploy/JAV.service`，编辑后 `cp` 到 `~/.config/systemd/user/` 并
-  `daemon-reload`。cgroup 内存上限（High26/Max28/SwapMax16G）与 profile 预算需一起权衡。
+  `daemon-reload`。cgroup 内存上限（High31/Max34/SwapMax20G）与 profile 预算需一起权衡。
 
 ## 已知坑
-- ZIT worker 工作集 ~25G（RAM 19-21G + swap），MemoryHigh 若低于工作集会 thrash
-  到分钟级生成；超时重试路径必须彻底回收旧 worker（scheduler 已在 job_timeout
-  时 `sup.shutdown("job_timeout")`，勿改回复用）。
+- ZIT worker **实测峰值 ~29.2G RSS**（i2i/inpaint 的 fp32→bf16 derived cast 瞬
+  间；常驻 bf16 ~20G + fp32 副本）。cgroup `MemoryMax` 是 RAM+swap 总和，若低于
+  该峰值会**永久 thrash 且冻死事件循环**（2026-09-30 实测 45min 卡死，28G cap）；
+  profile `ram_budget_mb=30720` 与 High31/Max34 需同步权衡。超时重试路径必须彻底
+  回收旧 worker（scheduler 已在 job_timeout 时 `sup.shutdown("job_timeout")`，
+  勿改回复用）。
 - SIGKILL CUDA 进程会留下驱动级“幽灵”VRAM 占用；vram 准入会让后续任务排队退避
   直至释放，属预期行为，不要为此加重试逻辑。
 - ZIT derived pipeline（i2i/inpaint）首次使用需 fp32→bf16 全量 cast，首任务比
   t2i 慢数分钟，属正常。
+- ComfyUI **v3 io 节点的 DynamicCombo**（如 ResizeImageMaskNode 的 resize_type）
+  在 API prompt 里的合法形态是 `"resize_type": "<选项字符串>"` +
+  `"resize_type.<子字段>": value` 点号键；写成嵌套 dict 会通过验证但在 execute
+  时丢参（`comfy_provider._set_deep` 已自动展开，模板初值保持点号形态）。
+- ComfyUI RandomNoise 等采样节点要求 seed ≥ 0：`seed=-1`（随机）由
+  `models.eff_seed` 在编译期随机化，勿把 -1 直接注入图。

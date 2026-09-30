@@ -88,7 +88,10 @@ def default_profiles() -> dict[str, Profile]:
     return {
         "zit": Profile(
             name="zit", backend="zit_subprocess",
-            ram_budget_mb=20480, vram_budget_mb=12800,
+            # observed peak 29.2G RSS during i2i/inpaint fp32->bf16 derived
+            # cast (resident bf16 ~20G + temporary fp32 checkpoint copy);
+            # 20480 under-budgeted the peak and thrashed against the cgroup cap
+            ram_budget_mb=30720, vram_budget_mb=12800,
             start_timeout_s=600, job_timeout_s=900,
             idle_unload_s=int(os.getenv("JAV_ZIT_IDLE_UNLOAD_S", "300")),
             python_bin=os.getenv("ZIT_PYTHON_BIN", CONDA_IMAGE_PY),

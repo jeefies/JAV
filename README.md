@@ -35,23 +35,25 @@ JAV/
 ```bash
 systemctl --user start JAV.service      # :8765，日志 journalctl --user -u JAV
 /home/jeefy/miniconda3/envs/comfyui/bin/python3 -m pytest tests -q
-python3 tools/verify_weights.py         # 全部 35 项权重 149.8G（size+sha256+header），失败带修复命令
+python3 tools/verify_weights.py         # 全部权重（registry 47 项 ~153G：size+sha256+header），失败带修复命令
 ```
 
 权重（全部在 /mnt/data/AV，红线）：
 - ZIT diffusers 快照：`/mnt/data/AV/models/Z-Image-Turbo`
-- LTX：`/mnt/data/AV/ComfyUI/models/{checkpoints,diffusion_models,...}`（2.5 权重未到位，capability 自动 unavailable）
-- MH3：待重新下载 INT8 convrot 到 ComfyUI models 目录
+- LTX：`/mnt/data/AV/ComfyUI/models/{checkpoints,diffusion_models,...}`（2.5 distilled int8 + 控制 LoRA 全量在盘）
+- MH3：`ComfyUI/models/` int8-convrot 套件 + turbo/fun-control LoRA
 
 ## 当前状态（2026-09-30）
 
 | Profile | 权重 | E2E |
 |---|---|---|
 | zit | ✅ 在盘 | ✅ t2i batch / i2i / inpaint / 缓存 / 崩溃恢复 |
-| ltx25 | ✅ LTX-2.5 distilled int8-convrot 38.7G + latent upscalers 1.26G + bbox IC-LoRA 0.33G | ✅ t2v / i2v / flf2v / a2v / **bbox_control** 首验出片；`generation.mode:"high"` = Two-Stage（latent x2 + 3步 re-sampler）t2v/i2v/flf2v 已验证，bbox HD 实测 1536×896 出片；官方 union/motion/inpaint IC-LoRA 仍 gated:auto（需 HF 网页端许可），bbox 为第三方 GPL 兼容版 |
+| ltx25 | ✅ LTX-2.5 distilled int8-convrot 38.7G + latent upscalers 1.26G + bbox IC-LoRA 0.33G + **5 控制 LoRA**（union-control 2.3 / clean-plate / slow-motion / ingredients / cinemagraph 2.5，共 1.9G） | ✅ t2v / i2v / flf2v / a2v / **bbox_control** 首验出片；`generation.mode:"high"` = Two-Stage（latent x2 + 3步 re-sampler）t2v/i2v/flf2v 已验证，bbox HD 实测 1536×896 出片；**控制族 6 图（union/motion/inpaint/outpaint/ic_lora×2 mode）全部真实出片**（官方 2.5 UI 样例 subgraph 展开重写，时长画幅跟随源视频） |
 | mh3.fl2va | ✅ pruned int8-convrot + nvfp4 TE + 双 VAE ~50.5G + turbo LoRA 2.0G | ✅ t2v / i2v / fl2v / multiframe(含 video 关键帧=continuation) 首验出片，capability 已点亮 |
 | mh3.ref2va | ✅ ref2va pruned int8 21G + turbo LoRA 2.0G + fun-controlnet union int8 6.8G（2.0 + 原版） | ✅ ref2v（双参考图 Autogrow）与 **fun_control**（ModelPatch controlnet）首验出片，capability 已点亮 |
 
-权重全部位于 `/mnt/data/AV`（`tools/audit_weights.py` 审计通过），
-统一 Python 环境 `/home/jeefy/miniconda3/envs/comfyui`（openclaw-home image env 已删除）。
-新 workflow 首验用 `tools/first_validation.py`（in-process 生产路径，无需服务在跑，成功后自动点亮 capability）。
+19/19 工作流 available。**真实生成回归**：`tools/live_e2e.py`（对运行中的服务走
+HTTP + SDK，产物用 PIL/ffprobe 做内容级断言，分阶段 `--stage zit,ltx25,control,mh3`）；
+新工作流首验用 `tools/first_validation.py`（单项）或 `tools/batch_first_validation.py`
+（多项同进程批量，共享一次 ComfyUI 冷启动）——两者都走 in-process 生产路径并自动
+点亮 capability，且带防双 runtime 互斥锁。FakeBackend pytest 与真实出片两层缺一不可。

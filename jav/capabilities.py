@@ -13,6 +13,8 @@ from .models import PROVIDER_WORKFLOWS
 # Workflows whose provider templates are implemented in code.
 IMPLEMENTED = {"zit.t2i", "zit.i2i", "zit.inpaint",
                "ltx25.t2v", "ltx25.i2v", "ltx25.flf2v", "ltx25.a2v", "ltx25.bbox_control",
+               "ltx25.union_control", "ltx25.motion_control", "ltx25.inpaint",
+               "ltx25.outpaint", "ltx25.ic_lora",
                "mh3.t2v", "mh3.i2v", "mh3.fl2v", "mh3.ref2v", "mh3.fun_control",
                "mh3.multiframe"}
 
@@ -35,17 +37,15 @@ def _load_flags() -> dict:
     return {}
 
 
-def _mh3_template_files(profile: str) -> set[str]:
-    """Every .safetensors actually referenced by the profile's workflow
-    templates (vae_name/unet_name/clip_name/lora_name). The weight gate is
-    DERIVED from the graphs so it can never green-light a workflow whose
-    loader target was purged (gate vs template drift)."""
+def _template_files(provider: str, workflows: list[str]) -> set[str]:
+    """Every .safetensors referenced by the given workflow templates
+    (vae_name/unet_name/clip_name/lora_name), so the weight gate can never
+    green-light a workflow whose loader target was purged."""
     keys = ("vae_name", "unet_name", "clip_name", "lora_name")
     names: set[str] = set()
-    for wf, prof in PROVIDER_WORKFLOWS.get("mh3", {}).items():
-        if prof != profile:
-            continue
-        tpl = config.BASE_DIR / "jav" / "workflows" / "mh3" / f"{wf}.api.json"
+    root = config.BASE_DIR / "jav" / "workflows" / provider
+    for wf in workflows:
+        tpl = root / f"{wf}.api.json"
         if not tpl.exists():
             continue
         try:
@@ -77,21 +77,21 @@ def _weights_for(profile: str) -> tuple[bool, str]:
             for p in ("model_index.json", "transformer"))
         return ok, "Z-Image-Turbo diffusers snapshot"
     if profile == "ltx25":
-        needles = ("ltx-2.5", "ltx2.5", "ltx_2.5")
-        hits = []
-        for d in ("checkpoints", "diffusion_models"):
-            root = config.COMFYUI_DIR / "models" / d
-            if root.is_dir():
-                hits += [f.name for f in root.iterdir()
-                         if any(n in f.name.lower() for n in needles)]
-        return bool(hits), f"LTX 2.5 weights {hits or ''}"
+        m = config.COMFYUI_DIR / "models"
+        need = _template_files("ltx25", sorted(PROVIDER_WORKFLOWS["ltx25"]))
+        # upscale variants share names; the distilled template sweep above
+        # already contains every loader target of shipped graphs
+        missing = [n for n in sorted(need)
+                   if not any((m / sub / n).exists() for sub in _MH3_MODEL_SUBDIRS)]
+        return not missing, f"LTX 2.5 weights missing {missing}"
     if profile.startswith("mh3"):
         kind = "ref2va" if profile.endswith("ref2va") else "fl2va"
         m = config.COMFYUI_DIR / "models"
-        need = {f"minimax_h3_{kind}_pruned_int8_convrot.safetensors",
-                "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-                "minimax_h3_audio_vae_fp32.safetensors"}
-        need |= _mh3_template_files(profile)
+        wfs = [w for w, p in PROVIDER_WORKFLOWS["mh3"].items() if p == profile]
+        need = _template_files("mh3", wfs)
+        need |= {f"minimax_h3_{kind}_pruned_int8_convrot.safetensors",
+                 "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                 "minimax_h3_audio_vae_fp32.safetensors"}
         from .providers.mh3 import TURBO_LORA  # code-injected loras, not in templates
         need |= set(TURBO_LORA.values())
         missing = [n for n in sorted(need)

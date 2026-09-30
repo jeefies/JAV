@@ -24,13 +24,28 @@
 | provider.workflow | runtime_profile |
 |---|---|
 | zit.t2i / zit.i2i / zit.inpaint | zit |
-| ltx25.t2v / i2v / flf2v / a2v / union_control / motion_control / inpaint / outpaint / ic_lora | ltx25 |
+| ltx25.t2v / i2v / flf2v / a2v / union_control / motion_control / inpaint / outpaint / ic_lora / bbox_control | ltx25 |
 | mh3.t2v / i2v / fl2v | mh3.fl2va |
 | mh3.ref2v / fun_control / multiframe | mh3.ref2va |
 
 已验证扩展语义：
 - `ltx25`：`generation.mode = "fast"`（默认，单段 distilled 8 步）| `"high"`
   （Two-Stage：低段生成 → latent x2 上采样 → 3 步 re-sampler，输出约 2× 分辨率；t2v/i2v/flf2v 支持（flf2v stage2 在 x2 上采样前 CropGuides 剥离关键帧 token，随后 re-anchor））
+- **ltx25 IC-LoRA 控制族**（`union_control` / `motion_control` / `inpaint` /
+  `outpaint` / `ic_lora`）：单段 distilled + IC-LoRA guide，**时长与画幅跟随源
+  视频**（不接受 duration/width/height；`generation.strength` 0..1 控制 guide
+  强度，默认 1.0；`inputs.shorter_size` 128..768 且 32 倍数，默认 512）：
+  - `union_control`：`inputs.control_video`（必需）→ Canny 边缘引导
+    （`canny_low`/`canny_high` 0.01..0.99 默认 0.4/0.8），union-control IC-LoRA
+  - `motion_control`：`inputs.source_video`（必需）→ slow-motion IC-LoRA 变换
+  - `inpaint`：`source_video` + `mask_image`（白色=重绘，整段生效）+
+    `dilate_radius` 0..32（默认 5），clean-plate IC-LoRA
+  - `outpaint`：`source_video` + `canvas_width`/`canvas_height`（必需，32 倍数
+    256..2048，向外扩展画布）
+  - `ic_lora`：`mode="reference"`（默认）：`reference_sheet`（参考拼版图，
+    ingredients LoRA 图生视频）；`mode="v2v"`：`source_video` +
+    `lora ∈ {cinemagraph, clean_plate, ingredients, slow_motion}` 视频编辑
+  - seed 缺省 -1 = 服务端随机（响应中不回显有效 seed）
 - `mh3`：`inputs.turbo = true`（官方 turbo LoRA 路径，fl2v 系 8 步 / ref2v 4 步，走已下载的 turbo LoRA）
 - `mh3.fun_control`：`inputs.control_video`（必需，video asset）+ `inputs.control_strength`
   （默认 1.0）；Fun ControlNet-Union patch 支持 canny/depth/pose/hed 控制视频，

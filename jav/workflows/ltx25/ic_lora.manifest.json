@@ -1,0 +1,55 @@
+{
+  "provider": "ltx25",
+  "workflow": "ic_lora",
+  "runtime_profile": "ltx25",
+  "params": {
+    "prompt": {
+      "node": "5.inputs.text"
+    },
+    "negative_prompt": {
+      "node": "6.inputs.text"
+    },
+    "seed": {
+      "node": "11.inputs.noise_seed"
+    },
+    "cfg": {
+      "node": "12.inputs.cfg"
+    },
+    "strength": {
+      "node": "38.inputs.strength"
+    },
+    "lora_name": {
+      "node": "30.inputs.lora_name"
+    },
+    "guide_shorter": {
+      "node": "34.inputs.resize_type"
+    },
+    "guide_multiple": {
+      "node": "35.inputs.resize_type"
+    },
+    "length": {
+      "node": "8.inputs.length"
+    },
+    "audio_frames": {
+      "node": "9.inputs.frames_number"
+    },
+    "repeat_amount": {
+      "node": "32.inputs.amount"
+    },
+    "fps_video": {
+      "node": "19.inputs.fps"
+    },
+    "cond_fps": {
+      "node": "7.inputs.frame_rate"
+    }
+  },
+  "assets": {
+    "reference_sheet": {
+      "node": "31.inputs.image"
+    }
+  },
+  "outputs": [
+    "video"
+  ],
+  "notes": "LTX-2.5 distilled + IC-LoRA guide chain (official 2.5 examples flattened)"
+}

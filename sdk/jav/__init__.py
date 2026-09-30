@@ -43,7 +43,12 @@ class Job:
     def wait(self, timeout: float = 1800, interval: float = 2.0) -> "JobResult":
         deadline = time.time() + timeout
         while time.time() < deadline:
-            d = self.refresh()
+            try:
+                d = self.refresh()
+            except Exception:
+                # transient poll failure (server busy/swap thrash): keep waiting
+                time.sleep(interval)
+                continue
             if d["status"] in TERMINAL:
                 return JobResult(self, d)
             time.sleep(interval)

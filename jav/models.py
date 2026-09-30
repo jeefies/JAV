@@ -1,11 +1,19 @@
 """Pydantic domain models — the single API contract source (JAV-DESIGN 1)."""
 from __future__ import annotations
 
+import random
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
 Providers = Literal["zit", "mh3", "ltx25"]
+
+
+def eff_seed(gen: dict) -> int:
+    """ComfyUI samplers validate seed >= 0: randomize -1 at compile time.
+    (The ZIT worker consumes the raw seed and handles -1 itself.)"""
+    s = int(gen.get("seed", -1))
+    return s if s >= 0 else random.randint(0, 2**32 - 1)
 
 
 class ProviderError(ValueError):

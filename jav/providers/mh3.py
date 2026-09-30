@@ -7,7 +7,7 @@ weights (not downloaded yet — gated by capabilities).
 """
 from __future__ import annotations
 
-from ..models import ProviderError
+from ..models import ProviderError, eff_seed
 from . import comfy_provider
 
 WORKFLOWS = ("t2v", "i2v", "fl2v", "ref2v", "fun_control", "multiframe")
@@ -130,7 +130,7 @@ def compile(payload: dict, asset_paths: dict[str, str], output_dir, base_dir) ->
     gen = payload["generation"]
     params = {"prompt": payload["prompt"], "width": gen["width"],
               "height": gen["height"], "length": gen["length"],
-              "steps": gen["steps"], "seed": gen["seed"], "fps": gen["fps"],
+              "steps": gen["steps"], "seed": eff_seed(gen), "fps": gen["fps"],
               "width_img": gen["width"], "height_img": gen["height"],
               "strength": gen.get("strength", 0.7)}
     if payload["workflow"] == "fl2v":

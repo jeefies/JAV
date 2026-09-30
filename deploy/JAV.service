@@ -22,12 +22,12 @@ TimeoutStopSec=120
 
 # Hard cgroup caps: any runaway pipeline/ComfyUI child is OOM-killed INSIDE
 # this unit's cgroup first, never globally (protects unichess training).
-# ZIT bf16 cpu-offload working set is ~25G (20G RAM + swap); MemoryHigh above
-# it avoids constant reclaim thrash; MemorySwapMax leaves >=16G swap for
-# everyone else on the box.
-MemoryHigh=26G
-MemoryMax=28G
-MemorySwapMax=16G
+# memory.max is the RAM+SWAP sum: the ZIT derived-pipeline (i2i/inpaint) cast
+# peak measures ~29.2G, so the cap must sit above it or the cgroup thrashes
+# forever (28G cap froze the worker mid-cast for 45min on 2026-09-30).
+MemoryHigh=31G
+MemoryMax=34G
+MemorySwapMax=20G
 
 NoNewPrivileges=true
 

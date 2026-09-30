@@ -1,0 +1,28 @@
+{
+  "params": {
+    "prompt": {"node": "276.inputs.text"},
+    "negative_prompt": {"node": "275.inputs.text"},
+    "width": {"node": "268.inputs.width"},
+    "height": {"node": "268.inputs.height"},
+    "num_frames": {"node": "268.inputs.length"},
+    "audio_frames": {"node": "266.inputs.frames_number"},
+    "fps": {"node": "270.inputs.frame_rate"},
+    "video_fps": {"node": "44.inputs.fps"},
+    "seed": {"node": "274.inputs.noise_seed"},
+    "seed2": {"node": "36.inputs.noise_seed"},
+    "video_cfg": {"node": "273.inputs.video_cfg"},
+    "audio_cfg": {"node": "273.inputs.audio_cfg"},
+    "cfg": {"node": "35.inputs.video_cfg"},
+    "strength": {"node": "263.inputs.strength"},
+    "strength2": {"node": "265.inputs.strength"},
+    "width_img": {"node": "282.inputs.width"},
+    "height_img": {"node": "282.inputs.height"},
+    "width_img2": {"node": "283.inputs.width"},
+    "height_img2": {"node": "283.inputs.height"}
+  },
+  "assets": {
+    "first_image": {"node": "280.inputs.image"},
+    "last_image": {"node": "281.inputs.image"}
+  },
+  "outputs": ["video"]
+}

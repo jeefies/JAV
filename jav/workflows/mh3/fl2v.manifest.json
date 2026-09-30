@@ -1,0 +1,48 @@
+{
+  "params": {
+    "prompt": {
+      "node": "139.inputs.prompt"
+    },
+    "width": {
+      "node": "139.inputs.width"
+    },
+    "height": {
+      "node": "139.inputs.height"
+    },
+    "length": {
+      "node": "139.inputs.length"
+    },
+    "steps": {
+      "node": "132.inputs.steps"
+    },
+    "seed": {
+      "node": "137.inputs.noise_seed"
+    },
+    "fps": {
+      "node": "138.inputs.fps"
+    },
+    "width_img": {
+      "node": "210.inputs.width"
+    },
+    "height_img": {
+      "node": "210.inputs.height"
+    },
+    "width_img2": {
+      "node": "211.inputs.width"
+    },
+    "height_img2": {
+      "node": "211.inputs.height"
+    }
+  },
+  "assets": {
+    "first_frame": {
+      "node": "200.inputs.image"
+    },
+    "last_frame": {
+      "node": "201.inputs.image"
+    }
+  },
+  "outputs": [
+    "video"
+  ]
+}

@@ -1,0 +1,139 @@
+# JAV 统一 API
+
+服务：`127.0.0.1:8765`（经 `ZIT-tunnel` 暴露为远端 `3001`）。
+所有任务/资产响应使用 `id` 字段。输入媒体一律走 asset 上传，任务体只引用 `asset_id`。
+
+## 概念
+
+- **provider**：`zit` | `ltx25` | `mh3`
+- **workflow**：provider 内的能力名（见 `/v1/capabilities`）
+- **runtime_profile**：真正占用 GPU 的资源档位（`zit` / `ltx25` / `mh3.fl2va` / `mh3.ref2va`），
+  互斥调度，同一时刻仅一个常驻
+
+| provider.workflow | runtime_profile |
+|---|---|
+| zit.t2i / zit.i2i / zit.inpaint | zit |
+| ltx25.t2v / i2v / flf2v / a2v / union_control / motion_control / inpaint / outpaint / ic_lora | ltx25 |
+| mh3.t2v / i2v / fl2v | mh3.fl2va |
+| mh3.ref2v / fun_control / multiframe | mh3.ref2va |
+
+已验证扩展语义：
+- `ltx25`：`generation.mode = "fast"`（默认，单段 distilled 8 步）| `"high"`
+  （Two-Stage：低段生成 → latent x2 上采样 → 3 步 re-sampler，输出约 2× 分辨率；t2v/i2v/flf2v 支持（flf2v stage2 在 x2 上采样前 CropGuides 剥离关键帧 token，随后 re-anchor））
+- `mh3`：`inputs.turbo = true`（官方 turbo LoRA 路径，fl2v 系 8 步 / ref2v 4 步，走已下载的 turbo LoRA）
+- `mh3.fun_control`：`inputs.control_video`（必需，video asset）+ `inputs.control_strength`
+  （默认 1.0）；Fun ControlNet-Union patch 支持 canny/depth/pose/hed 控制视频，
+  ref2va base，默认 20 步
+- `mh3.multiframe`：`inputs.reference_images`（1-9）+ `inputs.keyframes`
+  （`[{image|video, time}]`，≤8；`video` 走 LoadVideo clip 锚定 = 官方 continuation 语义，
+  `time` 秒 → `MiniMaxH3AddGuide` 按 `round(time*fps)` clamp 到帧）；
+  ref2va base，链式把每张关键帧锚定到 latent 对应帧，默认 20 步
+
+## 任务
+
+### POST /v1/jobs
+```json
+{
+  "provider": "zit",
+  "workflow": "t2i",
+  "inputs":  {"prompt": "a red cube", "negative_prompt": "",
+              "image": "<asset_id>", "mask": "<asset_id>"},
+  "generation": {"width": 1024, "height": 1024, "steps": 9,
+                 "guidance": 0.0, "strength": 0.8, "seed": -1},
+  "priority": 0,
+  "client_ref": "optional"
+}
+```
+- 201 → `{id, status:"queued", runtime_profile, queue_position, ...}`
+- 415：workflow 不可用（`{"detail":"... unavailable: <reason>"}`）
+- 400：参数/资产校验失败；429：队列积压超限（500）
+- `seed >= 0` 时启用缓存命中：完全相同参数的已完成任务直接返回 `status:"completed"`
+- `inputs.image`：i2i 必填；`inputs.mask`：inpaint 必填（白色=重绘，黑色=保留）
+
+### POST /v1/jobs/batch
+```json
+{
+  "shared": {"provider":"zit","workflow":"t2i",
+             "generation": {"width":512,"height":512,"steps":4}},
+  "jobs":   [{"inputs": {"prompt": "one"}},
+             {"inputs": {"prompt": "two"}, "generation": {"seed": 7}}],
+  "client_ref": "storyboard-01"
+}
+```
+- 整批原子校验：任一 job 非法 → 422 `{"detail":{"invalid_jobs":{index: reason}}}`，零入队
+- 201 → `{batch_id, jobs:[id...], queue_positions:{id: n}}`
+- 上限 64 jobs/批；同 profile 任务由调度器聚组连跑（省 runtime 切换）
+
+### GET /v1/jobs
+过滤参数：`status`（逗号分隔多值）、`runtime_profile`、`batch_id`、`provider`、`limit`、`offset`
+返回 `{total, jobs:[<public job>]}`
+
+### GET /v1/jobs/{id}
+```json
+{ "id":"job_...", "provider":"zit", "workflow":"t2i", "runtime_profile":"zit",
+  "status":"running", "batch_id":null, "client_ref":null,
+  "created_at":"...", "started_at":"...", "finished_at":null,
+  "error":null, "error_type":null, "retry_count":0, "queue_position":3,
+  "outputs":[{"id":"out_...","kind":"image","asset_id":"asset_...",
+              "url":"/v1/jobs/job_.../output?asset_id=out_..."}] }
+```
+状态机：`queued → starting_runtime → running → completed | failed | cancelled`
+（崩溃重启后在途任务自动回到 `queued`）
+
+### DELETE /v1/jobs/{id}
+- 排队中 → `{"status":"cancelled"}` 立即生效
+- 运行中 → `{"status":"cancelling"}`（ComfyUI 走 /interrupt；ZIT 跑完当前图后丢弃结果）
+
+### GET /v1/jobs/{id}/outputs · GET /v1/jobs/{id}/output?asset_id=
+列表 / 直接下载产物文件（content-addressed，可长期缓存）。
+
+### GET /v1/jobs/{id}/events （SSE）
+`event: status` + `data: {"status": "..."}`，终态后关闭；5s keepalive。
+
+## Batch
+- `GET /v1/batches/{id}` → `{id, counts:{status:n}, jobs:[id...]}`
+- `DELETE /v1/batches/{id}` → 批量取消未完成项
+
+## 资产
+### POST /v1/assets?kind=image|video|audio
+- **raw-body 上传**：请求体即文件字节；`x-filename` 头可选（用于推断 kind/扩展名）
+- 或 `POST /v1/assets/upload?kind=` multipart（字段名 `file`）
+- 201 → `{"id":"asset_...", "type":"image", "sha256":"...", "size":n}`
+- SHA-256 去重：相同字节返回同一 `id`；上限 2GiB/文件
+
+### GET /v1/assets/{id} · DELETE /v1/assets/{id}
+
+## 系统
+- `GET /v1/capabilities` — 每个 workflow 的 `available` 由
+  权重在盘 × 模板实现 × 硬件 smoke 标志动态计算；`reason` 说明不可用原因
+- `GET /v1/queue` — `{active_profile, state, streak, queued_by_profile,
+  queued_total, admission_backoff}`
+- `GET /v1/runtime` — 当前 runtime 进程/RAM/swap/VRAM 指标 + 最近切换事件
+- `POST /v1/runtime/keepalive` — 刷新空闲卸载计时器，让当前 runtime 继续驻留
+  （可选 `?ttl_s=` 临时延长本轮窗口，上限 7200s）；返回
+  `{kept_alive, state, idle_unload_in_s}`。无活跃 runtime 时返回
+  `{kept_alive: null}`，下个任务照常冷启动
+- `POST /v1/runtime/unload` — 立即释放 active runtime（不等空闲超时），
+  返回卸载前 profile 与队列快照
+- `GET /v1/health` — liveness
+
+## 调度语义
+- 互斥：跨 profile 切换 = 软清理(`/free`) → SIGTERM → 显存释放确认 → 起新进程
+- affinity：同 profile 连跑 ≤3 个任务；其他 profile 等待 >10min 触发切换；
+  绝不在任务中途切换 runtime
+- 准入（OOM 防护）：启动 runtime 前要求实时
+  `MemAvailable+SwapFree ≥ RAM 预算 + 4G 地板` 且 `VRAM free ≥ 显存预算`，
+  不满足则任务保持 queued 指数退避（15s→4min）
+- 空闲卸载：runtime 无任务超过 `idle_unload_s`（zit 默认 **300s**，可用
+  `JAV_ZIT_IDLE_UNLOAD_S` 调整）后自动 STOPPED 释放约 20G RAM + 全部显存；
+  不等的话可随时 `POST /v1/runtime/unload` 手动释放。空闲后的首个任务会
+  多付约 60–90s 权重加载时间（页缓存预热后可接受）。
+- 失败重试：runtime 崩溃/超时/OOM 自动重入队一次；确定性参数错误不重试
+
+## 内部端点（仅本机回环，勿外部调用）
+- `POST /v1/internal/task_complete` — worker 任务结果回调
+- `POST /v1/internal/pipeline_status` — worker 加载/卸载状态回调
+
+## 兼容说明
+旧 ZIT-service `/v1/tasks` 系列**未保留**（用户决策 2026-09-29：JAV 完成后
+jeefy-tools 直接适配 `/v1/jobs`）。

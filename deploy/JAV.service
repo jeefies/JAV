@@ -1,0 +1,31 @@
+[Unit]
+Description=JAV - Jeefy Audio-Video Generation Platform
+Documentation=file:///mnt/data/AV/JAV-DESIGN.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/data/AV/JAV
+Environment=PYTHONPATH=/mnt/data/AV/JAV
+Environment=HF_HOME=/mnt/data/AV/JAV/data/hf_home
+ExecStart=/home/jeefy/miniconda3/envs/comfyui/bin/python3 -m uvicorn jav.server:create_app --factory --host 127.0.0.1 --port 8765 --log-level info
+
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=120
+
+# Hard cgroup caps: any runaway pipeline/ComfyUI child is OOM-killed INSIDE
+# this unit's cgroup first, never globally (protects unichess training).
+# ZIT bf16 cpu-offload working set is ~25G (20G RAM + swap); MemoryHigh above
+# it avoids constant reclaim thrash; MemorySwapMax leaves >=16G swap for
+# everyone else on the box.
+MemoryHigh=26G
+MemoryMax=28G
+MemorySwapMax=16G
+
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

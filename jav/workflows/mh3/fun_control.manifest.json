@@ -1,0 +1,16 @@
+{
+  "params": {
+    "prompt": {"node": "136.inputs.prompt"},
+    "width": {"node": "136.inputs.width"},
+    "height": {"node": "136.inputs.height"},
+    "length": {"node": "136.inputs.length"},
+    "steps": {"node": "124.inputs.steps"},
+    "seed": {"node": "129.inputs.noise_seed"},
+    "fps": {"node": "130.inputs.fps"},
+    "strength": {"node": "172.inputs.strength"}
+  },
+  "assets": {
+    "control_video": {"node": "175.inputs.file"}
+  },
+  "outputs": ["video"]
+}

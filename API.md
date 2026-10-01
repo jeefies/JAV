@@ -14,6 +14,16 @@
   任何客户端（含隧道对端）伪造回调都会被 403 拒绝；回调携带的文件路径还受
   托管目录白名单（pending / outputs / ComfyUI output）二次约束。
 
+### 当前状态（2026-10-01 起：Bearer 已启用）
+
+- Token 存放于 **`~/.config/jav/env`**（chmod 600，仓库外），经 systemd drop-in
+  `~/.config/systemd/user/JAV.service.d/10-auth.conf` 的 `EnvironmentFile` 注入。
+  **token 值不得写入任何 git 跟踪的文件（含本文档）**。
+- 本机调用：`curl -H "Authorization: Bearer $(grep -m1 '^JAV_API_TOKEN=' ~/.config/jav/env | cut -d= -f2)" …`；
+  SDK 传 `token=` 或设环境变量 `JAV_API_TOKEN`。
+- 轮换：编辑 `~/.config/jav/env` → `systemctl --user restart JAV.service`
+  （callback 秘密随进程重新随机，无需手动同步）。
+
 ## 概念
 
 - **provider**：`zit` | `ltx25` | `mh3`

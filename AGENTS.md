@@ -23,8 +23,9 @@
    workflow 变更只改 `jav/workflows/*` 模板与 manifest。
 6. jeefy-tools 兼容层**故意不存在**；外部适配是独立后置任务。
 7. **安全边界**：`/v1/internal/*` 只认 `X-JAV-Callback` 秘密头，且回调路径必须
-   落在托管目录白名单内（防伪造回调读取任意文件）；端口一旦经隧道对外，
-   必须配置 `JAV_API_TOKEN`（非 GET 端点 Bearer 校验）。资产删除受引用保护。
+   落在托管目录白名单内（防伪造回调读取任意文件）。**Bearer 已启用（2026-10-01）**：
+   `JAV_API_TOKEN` 在 `~/.config/jav/env`（600，仓库外）经 drop-in 注入，非 GET 端点
+   强制校验；**token 值严禁写入 git 跟踪文件**。资产删除受引用保护。
 
 ## 开发
 - 解释器：统一 conda env `comfyui`（服务、ZIT worker、ComfyUI backend 同一

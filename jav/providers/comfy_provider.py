@@ -57,8 +57,3 @@ def compile_graph(provider: str, workflow: str, params: dict,
         if name in (asset_names or {}):
             _set_deep(graph, rule["node"], asset_names[name])
     return graph
-
-
-def output_kinds(provider: str, workflow: str) -> list[str]:
-    _, manifest = load_pair(provider, workflow)
-    return manifest.get("outputs", ["video"])

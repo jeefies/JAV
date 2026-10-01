@@ -5,6 +5,7 @@ Uploads are streamed to disk with an incremental byte cap + SHA256 (never
 buffered whole on the event loop)."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import uuid
@@ -22,14 +23,22 @@ MAX_ASSET_BYTES = 2 * 1024**3
 CHUNK = 1024 * 1024
 
 
-async def _spool(request: Request | None, upload: UploadFile | None) -> tuple[Path, int]:
+async def _spool(request: Request | None, upload: UploadFile | None
+                  ) -> tuple[Path, int, str]:
     """Stream the request body to a temp file; enforce the 2GiB cap during
-    the transfer, not after buffering it."""
+    the transfer, not after buffering it. Returns (tmp, size, sha256) — the
+    digest is computed while streaming (single pass; a second full read of a
+    2GiB file on the event loop was freezing the scheduler)."""
     tmp_dir = config.ASSETS_DIR / ".tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     tmp = tmp_dir / f"{uuid.uuid4().hex}.part"
     total = 0
     h = hashlib.sha256()
+
+    def _open():
+        return open(tmp, "ab", buffering=0)
+
+    fh = await asyncio.to_thread(_open)
     try:
         if upload is not None:
             while True:
@@ -40,25 +49,22 @@ async def _spool(request: Request | None, upload: UploadFile | None) -> tuple[Pa
                 if total > MAX_ASSET_BYTES:
                     raise HTTPException(413, detail="asset exceeds 2GiB")
                 h.update(chunk)
-                await _write(tmp, chunk)
+                await asyncio.to_thread(fh.write, chunk)
         else:
             async for chunk in request.stream():
                 total += len(chunk)
                 if total > MAX_ASSET_BYTES:
                     raise HTTPException(413, detail="asset exceeds 2GiB")
                 h.update(chunk)
-                await _write(tmp, chunk)
+                await asyncio.to_thread(fh.write, chunk)
         if total == 0:
             raise HTTPException(400, detail="empty body")
     except Exception:
+        fh.close()
         tmp.unlink(missing_ok=True)
         raise
-    return tmp, total
-
-
-async def _write(tmp: Path, chunk: bytes):
-    with open(tmp, "ab") as fh:
-        fh.write(chunk)
+    fh.close()
+    return tmp, total, h.hexdigest()
 
 
 async def _ingest_request(request: Request, upload: UploadFile | None,
@@ -68,9 +74,7 @@ async def _ingest_request(request: Request, upload: UploadFile | None,
         cl = request.headers.get("content-length")
         if cl and cl.isdigit() and int(cl) > MAX_ASSET_BYTES:
             raise HTTPException(413, detail="asset exceeds 2GiB")
-    tmp, total = await _spool(request, upload)
-    with open(tmp, "rb") as fh:
-        sha_hex = hashlib.file_digest(fh, "sha256").hexdigest()
+    tmp, total, sha_hex = await _spool(request, upload)
     existing = ctx.store.get_asset(f"asset_{sha_hex[:16]}")
     if existing:
         tmp.unlink(missing_ok=True)

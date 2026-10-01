@@ -39,8 +39,7 @@ async def main():
                                                         "filename_prefix": "javsmoke"}},
         }
         task = {"graph": graph,
-                "asset_paths": {"src": "/tmp/kilo/i2i_input.png"},
-                "output_kinds": ["image"]}
+                "asset_paths": {"src": "/tmp/kilo/i2i_input.png"}}
         result = await be.submit("smoke_job_1", task)
         print("submit result:", json.dumps(result), flush=True)
         assert result["status"] == "success" and result["paths"], "smoke job failed"

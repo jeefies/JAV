@@ -3,6 +3,7 @@
 uvicorn --workers 1 keeps the scheduler singleton; HTTP layer is async."""
 from __future__ import annotations
 
+import hmac
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -56,7 +57,9 @@ def create_app(profiles: dict | None = None, store: Store | None = None,
             if (request.method == "GET" or path == "/v1/health"
                     or path.startswith("/v1/internal/")):
                 return await call_next(request)
-            if request.headers.get("authorization", "") != f"Bearer {config.API_TOKEN}":
+            if not hmac.compare_digest(
+                    request.headers.get("authorization", ""),
+                    f"Bearer {config.API_TOKEN}"):
                 return JSONResponse({"detail": "invalid or missing bearer token"},
                                     status_code=401)
             return await call_next(request)

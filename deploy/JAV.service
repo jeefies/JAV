@@ -18,7 +18,11 @@ ExecStart=/home/jeefy/miniconda3/envs/comfyui/bin/python3 -m uvicorn jav.server:
 Restart=on-failure
 RestartSec=5
 KillMode=mixed
-TimeoutStopSec=120
+# Worst-case graceful stop budget (keep in sync with jav/scheduler.py stop
+# wait + comfy /free + terminate wait + supervisor VRAM verification):
+# 90 + 10 + 15 + 30 = ~145s. Must exceed it or systemd SIGKILLs CUDA children
+# mid-teardown, leaving driver-level "ghost" VRAM (see AGENTS.md 已知坑).
+TimeoutStopSec=180
 
 # Hard cgroup caps: any runaway pipeline/ComfyUI child is OOM-killed INSIDE
 # this unit's cgroup first, never globally (protects unichess training).

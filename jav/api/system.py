@@ -1,7 +1,9 @@
 """System API: capabilities / runtime / queue / health."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+import asyncio
+
+from fastapi import APIRouter, HTTPException, Request
 
 from .. import capabilities, config
 from ..runtime.supervisor import mem_available_mb, vram_pids
@@ -36,6 +38,9 @@ async def get_runtime(request: Request):
         for line in fh:
             k, _, v = line.partition(":")
             kb[k] = int(v.strip().split()[0]) // 1024
+    # nvidia-smi subprocess can take 100ms-10s under driver contention; never
+    # run it inline on the event loop (supervisor moves these probes off-loop).
+    vram_by_pid = await asyncio.to_thread(vram_pids) if backend and backend.pid else None
     return {
         "active_profile": sup.active_profile,
         "state": sup.state,
@@ -44,8 +49,8 @@ async def get_runtime(request: Request):
         "mem": {"ram_available_mb": kb.get("MemAvailable", 0),
                 "swap_free_mb": kb.get("SwapFree", 0),
                 "admission_headroom_mb": mem_available_mb()},
-        "vram": {"used_by_managed_pids_mb":
-                 (vram_pids() or {}).get(backend.pid, 0) if backend and backend.pid else 0},
+        "vram": {"used_by_managed_pids_mb": (vram_by_pid or {}).get(backend.pid, 0)
+                 if backend and backend.pid else 0},
         "streak": ctx.sched.streak,
         "last_switch": sup.last_switch,
         "events": ctx.store.recent_events(15),
@@ -63,7 +68,9 @@ async def keepalive_runtime(request: Request, ttl_s: int | None = None):
                 "note": "no active runtime; next job will cold-start"}
     ctx.sup.job_finished()
     if ttl_s:
-        ctx.sup.keepalive_ttl_s = min(int(ttl_s), 7200)
+        # clamp both ways: a negative window would make stop_if_idle fire the
+        # very next tick — the exact opposite of keepalive
+        ctx.sup.keepalive_ttl_s = max(1, min(int(ttl_s), 7200))
     else:
         ctx.sup.keepalive_ttl_s = None
     profile = ctx.sup.profiles[ctx.sup.active_profile]
@@ -76,6 +83,12 @@ async def keepalive_runtime(request: Request, ttl_s: int | None = None):
 async def unload_runtime(request: Request):
     """Force-release the active runtime (RAM/VRAM) without waiting for idle."""
     ctx = request.app.ctx
+    # Never SIGTERM the GPU process out from under a live job (documented
+    # "tasks are never interrupted mid-flight" guarantee; explicit cancel
+    # first if you really want the outputs dropped).
+    busy = ctx.store.list_jobs(status="starting_runtime,running", limit=1)["total"]
+    if busy:
+        raise HTTPException(409, detail=f"{busy} job(s) in flight; cancel them first")
     prev = ctx.sup.active_profile
     await ctx.sup.shutdown("manual_unload")
     ctx.store.log_event(prev, None, "manual_unload")

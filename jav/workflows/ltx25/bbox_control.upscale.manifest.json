@@ -1,5 +1,6 @@
 {
   "params": {
+    "audio_fps": {"node": "95.inputs.frame_rate"},
     "negative_prompt": {
       "node": "5.inputs.text"
     },

@@ -35,6 +35,9 @@ class ZitBackend(BaseBackend):
         log_dir.mkdir(parents=True, exist_ok=True)
         self.log_handle = open(log_dir / f"zit.{os.getpid()}.log", "a+")
         env = os.environ.copy()
+        # The worker only ever needs the callback secret (set explicitly
+        # below); never expose the service's own API bearer token to it.
+        env.pop("JAV_API_TOKEN", None)
         env.update({
             "ZIT_MODEL_DIR": str(model_dir),
             "JAV_CALLBACK": f"http://127.0.0.1:{config.SERVICE_PORT}/v1/internal/task_complete",

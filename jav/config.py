@@ -67,21 +67,32 @@ class Profile:
     enabled: bool = True              # operator kill-switch
 
     @staticmethod
-    def from_dict(d: dict) -> "Profile":
-        return Profile(
-            name=d["name"],
-            backend=d["backend"],
-            ram_budget_mb=int(d.get("ram_budget_mb", 12288)),
-            vram_budget_mb=int(d.get("vram_budget_mb", 8192)),
-            start_timeout_s=int(d.get("start_timeout_s", 300)),
-            job_timeout_s=int(d.get("job_timeout_s", 1800)),
-            idle_unload_s=int(d.get("idle_unload_s", 1800)),
-            python_bin=d.get("python_bin", ""),
-            script=d.get("script", ""),
-            required_nodes=tuple(d.get("required_nodes", ())),
-            extra_args=tuple(d.get("extra_args", ())),
-            enabled=bool(d.get("enabled", True)),
-        )
+    def from_dict(d: dict, base: "Profile | None" = None) -> "Profile":
+        # Field-level merge: an override in profiles.yaml only replaces the
+        # keys it actually names. Without a base, the class defaults apply.
+        # (A whole-profile replace would silently blank script/python_bin
+        #  and timeouts — a service-killing trap documented 2026-10-01.)
+        import dataclasses
+        if base is not None:
+            vals = dataclasses.asdict(base)
+        else:
+            vals = dataclasses.asdict(
+                Profile(name=d.get("name") or "", backend=d.get("backend") or "",
+                        ram_budget_mb=12288, vram_budget_mb=8192))
+        for k, v in d.items():
+            if k not in vals:
+                raise ValueError(f"profiles.yaml: unknown key {k!r} for profile "
+                                 f"{d.get('name')!r}")
+            vals[k] = v
+        for k in ("ram_budget_mb", "vram_budget_mb", "start_timeout_s",
+                  "job_timeout_s", "idle_unload_s"):
+            vals[k] = int(vals[k])
+        for k in ("required_nodes", "extra_args"):
+            vals[k] = tuple(vals[k])
+        vals["enabled"] = bool(vals["enabled"])
+        if not vals["name"] or not vals["backend"]:
+            raise ValueError("profile requires name and backend")
+        return Profile(**vals)
 
 
 def default_profiles() -> dict[str, Profile]:
@@ -122,13 +133,16 @@ def default_profiles() -> dict[str, Profile]:
 
 
 def load_profiles() -> dict[str, Profile]:
+    # NOT memoized: callers may rebase config.BASE_DIR at runtime (tests), and
+    # default_profiles() embeds BASE_DIR paths. The per-submit YAML cost is now
+    # absorbed by the capabilities() result cache instead.
     profiles = default_profiles()
     cfg = BASE_DIR / "config" / "profiles.yaml"
     if cfg.exists():
         try:
             import yaml  # not guaranteed installed; yaml section is optional
             for d in yaml.safe_load(cfg.read_text()) or []:
-                p = Profile.from_dict(d)
+                p = Profile.from_dict(d, base=profiles.get(d.get("name")))
                 profiles[p.name] = p
         except ImportError:
             pass

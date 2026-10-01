@@ -72,6 +72,10 @@ class Store:
         self._conn.executescript(SCHEMA)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
+        # tools/*_smoke.py write to the live DB from a second process; without
+        # a busy timeout a colliding WAL write raises SQLITE_BUSY instantly and
+        # can strand a job mid-transition (default is 0ms).
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._migrate()
         self._conn.commit()
 

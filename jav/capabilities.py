@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 from . import config
@@ -37,15 +38,18 @@ def _load_flags() -> dict:
     return {}
 
 
-def _template_files(provider: str, workflows: list[str]) -> set[str]:
-    """Every .safetensors referenced by the given workflow templates
-    (vae_name/unet_name/clip_name/lora_name), so the weight gate can never
-    green-light a workflow whose loader target was purged."""
-    keys = ("vae_name", "unet_name", "clip_name", "lora_name")
+def _template_files(provider: str, workflows: list[str] | None = None) -> set[str]:
+    """Every .safetensors referenced by the provider's workflow templates
+    (any *_name loader key of any node: unet/vae/clip/lora/model_name/name),
+    so the weight gate can never green-light a workflow whose loader target
+    was purged. workflows=None sweeps ALL *.api.json in the provider dir —
+    variant templates (upscale/v2v) gate exactly like base ones."""
+    keys = ("vae_name", "unet_name", "clip_name", "lora_name", "model_name", "name")
     names: set[str] = set()
     root = config.BASE_DIR / "jav" / "workflows" / provider
-    for wf in workflows:
-        tpl = root / f"{wf}.api.json"
+    tpls = (sorted(root.glob("*.api.json")) if workflows is None
+            else [root / f"{wf}.api.json" for wf in workflows])
+    for tpl in tpls:
         if not tpl.exists():
             continue
         try:
@@ -66,7 +70,8 @@ def _template_files(provider: str, workflows: list[str]) -> set[str]:
     return names
 
 
-_MH3_MODEL_SUBDIRS = ("diffusion_models", "text_encoders", "vae", "loras", "checkpoints")
+_MH3_MODEL_SUBDIRS = ("diffusion_models", "text_encoders", "vae", "loras",
+                      "checkpoints", "model_patches", "latent_upscale_models")
 
 
 def _weights_for(profile: str) -> tuple[bool, str]:
@@ -78,9 +83,10 @@ def _weights_for(profile: str) -> tuple[bool, str]:
         return ok, "Z-Image-Turbo diffusers snapshot"
     if profile == "ltx25":
         m = config.COMFYUI_DIR / "models"
-        need = _template_files("ltx25", sorted(PROVIDER_WORKFLOWS["ltx25"]))
-        # upscale variants share names; the distilled template sweep above
-        # already contains every loader target of shipped graphs
+        need = _template_files("ltx25")  # full sweep incl. .upscale/.v2v variants:
+        # ic_lora_v2v (cinemagraph lora) and the upscale models are loader targets
+        # of shipped graphs and must gate the provider too (fail-closed over-gating
+        # is the safe direction for a per-profile gate).
         missing = [n for n in sorted(need)
                    if not any((m / sub / n).exists() for sub in _MH3_MODEL_SUBDIRS)]
         return not missing, f"LTX 2.5 weights missing {missing}"
@@ -100,7 +106,26 @@ def _weights_for(profile: str) -> tuple[bool, str]:
     return False, "unknown profile"
 
 
+_CAPS_TTL_S = 5.0
+_CAPS_CACHE: tuple[object, float, dict] | None = None
+
+
 def capabilities() -> dict:
+    # Cached (flags-mtime + short TTL): POST /v1/jobs calls is_available per
+    # job (batch = 64x) and a full disk re-scan on the event loop is waste.
+    # Invalidation on FLAGS_FILE mtime keeps operator/test writes immediate.
+    global _CAPS_CACHE
+    now = time.monotonic()
+    fkey = FLAGS_FILE.stat().st_mtime_ns if FLAGS_FILE.exists() else None
+    if (_CAPS_CACHE is not None and _CAPS_CACHE[0] == fkey
+            and now - _CAPS_CACHE[1] < _CAPS_TTL_S):
+        return _CAPS_CACHE[2]
+    out = _capabilities_compute()
+    _CAPS_CACHE = (fkey, now, out)
+    return out
+
+
+def _capabilities_compute() -> dict:
     flags = _load_flags()
     profiles = config.load_profiles()
     out: dict = {}
@@ -139,9 +164,12 @@ _FLAGS_LOCK = threading.Lock()
 def mark_validated(provider: str, workflow: str):
     """Called after a successful real smoke test of a workflow."""
     global _LAST_GOOD_FLAGS
+    key = f"{provider}.{workflow}"
     with _FLAGS_LOCK:  # serialize read-modify-write (no lost updates in-proc)
         flags = _load_flags()
-        flags[f"{provider}.{workflow}"] = True
+        if flags.get(key):
+            return  # already validated: skip the per-completion no-op rewrite
+        flags[key] = True
         FLAGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = FLAGS_FILE.with_name(f".flags.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(flags, indent=1))

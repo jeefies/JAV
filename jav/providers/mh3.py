@@ -33,9 +33,10 @@ def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
         raise ProviderError("mh3: prompt is required")
     assets = {}
     if workflow in ("i2v", "fl2v"):
-        if not inputs.get("first_frame"):
-            raise ProviderError(f"mh3.{workflow}: first_frame asset required")
-        assets["first_frame"] = inputs["first_frame"]
+        ff = inputs.get("first_frame") or inputs.get("image")  # docs alias
+        if not ff:
+            raise ProviderError(f"mh3.{workflow}: first_frame (or image) asset required")
+        assets["first_frame"] = ff
     if workflow == "fl2v":
         if not inputs.get("last_frame"):
             raise ProviderError("mh3.fl2v: last_frame asset required")
@@ -89,6 +90,9 @@ def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
         raise ProviderError("mh3: duration must be 1..15 s")
     if int(gen["fps"]) <= 0 or int(gen["fps"]) > 60:
         raise ProviderError("mh3: fps must be 1..60")
+    gen["steps"] = int(gen["steps"])
+    if not (1 <= gen["steps"] <= 128):
+        raise ProviderError("mh3: steps must be 1..128")
     turbo = bool(inputs.get("turbo"))
     if turbo:
         if workflow not in TURBO_STEPS:
@@ -114,7 +118,9 @@ def _inject_turbo_lora(graph: dict, workflow: str):
     """Insert LoraLoaderModelOnly between the UNET and the sampler for the
     official turbo path (fl2v 8-step / ref2v 4-step)."""
     unet = UNET_NODE[workflow]
-    lora_file = TURBO_LORA["ref2va" if workflow == "ref2v" else "fl2va"]
+    # multiframe runs on the ref2va base (UNET 127, 4-step schedule) — same
+    # turbo adapter as ref2v, not the fl2v 8-step one.
+    lora_file = TURBO_LORA["ref2va" if workflow in ("ref2v", "multiframe") else "fl2va"]
     graph["900"] = {"class_type": "LoraLoaderModelOnly",
                     "inputs": {"model": [unet, 0], "lora_name": lora_file,
                                "strength_model": 1.0}}
@@ -174,5 +180,4 @@ def compile(payload: dict, asset_paths: dict[str, str], output_dir, base_dir) ->
                 "image": img_node, "frame_idx": frame}}
             cond_src = [guide, 0]
         graph["126"]["inputs"]["conditioning"] = cond_src
-    return {"graph": graph, "asset_paths": asset_paths,
-            "output_kinds": ["video"]}
+    return {"graph": graph, "asset_paths": asset_paths}

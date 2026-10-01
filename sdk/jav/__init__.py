@@ -17,6 +17,7 @@ Assets are uploaded by path (content-addressed, dedup server-side).
 from __future__ import annotations
 
 import mimetypes
+import os
 import time
 from pathlib import Path
 
@@ -96,10 +97,27 @@ class Batch:
         return self.client._request("DELETE", f"/v1/batches/{self.batch_id}")
 
 
+def _resolve_token() -> str | None:
+    """token= > $JAV_API_TOKEN > ~/.config/jav/env (the systemd EnvironmentFile
+    holding the bearer secret). Keeps the secret out of code and callers."""
+    tok = os.environ.get("JAV_API_TOKEN")
+    if tok:
+        return tok.strip()
+    env_file = Path.home() / ".config" / "jav" / "env"
+    try:
+        for line in env_file.read_text().splitlines():
+            if line.startswith("JAV_API_TOKEN="):
+                return line.split("=", 1)[1].strip() or None
+    except OSError:
+        pass
+    return None
+
+
 class Client:
     def __init__(self, base: str = "http://127.0.0.1:8765", token: str | None = None):
         self.base = base.rstrip("/")
         self.session = requests.Session()
+        token = token or _resolve_token()
         if token:
             self.session.headers["Authorization"] = f"Bearer {token}"
 

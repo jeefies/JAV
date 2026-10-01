@@ -67,7 +67,9 @@ class BatchSpec(BaseModel):
         for key in ("inputs", "generation"):
             if isinstance(self.shared.get(key), dict):
                 out[key] = dict(self.shared[key])
-        out["client_ref"] = job.get("client_ref", self.client_ref)
+        # precedence: per-job > shared default > batch-level label
+        out["client_ref"] = (job.get("client_ref") if job.get("client_ref") is not None
+                              else out.get("client_ref") or self.client_ref)
         for key, val in job.items():
             if key in ("inputs", "generation") and isinstance(val, dict):
                 merged = dict(out.get(key, {}))

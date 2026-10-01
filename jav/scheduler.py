@@ -48,8 +48,7 @@ def _age_s(iso_ts: str) -> float:
 
 
 RETRYABLE_ERRORS = {"runtime_crash", "timeout", "start_error",
-                    "internal_error", "ingest_error", "runtime_start_failed",
-                    "oom_error"}
+                    "internal_error", "ingest_error", "oom_error"}
 
 
 class Scheduler:
@@ -121,7 +120,7 @@ class Scheduler:
         others = [j for j in queued if j["runtime_profile"] != active]
         if not others:
             return mine[0] if mine else None
-        wait_other = min(_age_s(j["created_at"]) for j in others)
+        wait_other = max(_age_s(j["created_at"]) for j in others)
         if mine and self.streak < self.max_same and wait_other < self.max_other_wait:
             return mine[0]
         return others[0]
@@ -210,7 +209,8 @@ class Scheduler:
         self.sup.job_finished()
         if result.get("cancel_requested") or self.store.cancel_requested(job["id"]):
             for p in result.get("paths", []):
-                Path(p).unlink(missing_ok=True)
+                if self._contained(p):
+                    Path(p).unlink(missing_ok=True)
             self._finish(job["id"], "cancelled", error="cancelled by user")
             return
         if result.get("status") == "success":
@@ -247,13 +247,20 @@ class Scheduler:
             return
         self._finish(job["id"], "failed", error=error[:500], error_type=error_type)
 
+    def _managed_roots(self) -> list[Path]:
+        # Managed output roots: ONLY paths under these are ever read, moved or
+        # deleted from backend/callback-reported data. This is the containment
+        # line against forged /v1/internal/task_complete payloads.
+        return [(config.DATA_DIR / "pending").resolve(),
+                config.OUTPUTS_DIR.resolve(),
+                (config.COMFYUI_DIR / "output").resolve()]
+
+    def _contained(self, p: str) -> bool:
+        rp = Path(p).resolve()
+        return any(rp == r or rp.is_relative_to(r) for r in self._managed_roots())
+
     def _ingest_outputs(self, job_id: str, paths: list[str]):
-        # Callback/graph outputs arrive as filesystem paths: ONLY paths under
-        # managed output roots are ever read, moved or registered. This is the
-        # containment line against forged /v1/internal/task_complete payloads.
-        roots = [(config.DATA_DIR / "pending").resolve(),
-                 config.OUTPUTS_DIR.resolve(),
-                 (config.COMFYUI_DIR / "output").resolve()]
+        roots = self._managed_roots()
         for p in paths:
             rp = Path(p).resolve()
             if not any(rp == r or rp.is_relative_to(r) for r in roots):
@@ -276,6 +283,12 @@ class Scheduler:
             self.store.add_output(job_id, kind, asset["id"], str(dest), role="main")
 
     def _finish(self, job_id: str, status: str, **extra):
+        # Final chokepoint: if a cancel was accepted (API already answered
+        # "cancelling") the job may never land as completed, even if it raced
+        # through the last checkpoint. Ingested content-addressed assets stay
+        # (dedup may share them); only the job status is honored as cancelled.
+        if status == "completed" and self.store.cancel_requested(job_id):
+            status, extra = "cancelled", {"error": "cancelled by user"}
         self.store.set_status(job_id, status, **extra)
         self.bus.publish(job_id, {"status": status, **extra})
 

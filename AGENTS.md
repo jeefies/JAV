@@ -33,9 +33,15 @@
 - 测试：`python3 -m pytest tests -q`（FakeBackend 驱动，秒级，不占 GPU/内存）；
   GPU 级验收见 README「当前状态」与 `tools/comfy_smoke.py`。
 - 修改 profile 预算：`jav/config.py`（默认值）或 `config/profiles.yaml`（覆盖）。
+  **profiles.yaml 是字段级合并**（2026-10-01 审计修正）：override 只替换它写出的
+  key，其余继承内置默认；未知 key 直接报错。旧版是整条替换，只写预算会把
+  `script`/`python_bin` 清成空串导致该 profile 全量停摆，勿改回。
 - 服务：`systemctl --user {start|restart|status} JAV.service`；
   unit 在 `deploy/JAV.service`，编辑后 `cp` 到 `~/.config/systemd/user/` 并
   `daemon-reload`。cgroup 内存上限（High31/Max34/SwapMax20G）与 profile 预算需一起权衡。
+- 停机预算：优雅停机最坏路径 = 调度器等待在途(90) + comfy `/free`(10) + terminate(15)
+  + supervisor VRAM 确认(30) ≈ 145s，必须 < `TimeoutStopSec`（现为 **180**）。改任一
+  数字都要同步改另一处，否则 systemd 会 SIGKILL CUDA 子进程留下“幽灵显存”（见已知坑）。
 
 ## 已知坑
 - ZIT worker **实测峰值 ~29.2G RSS**（i2i/inpaint 的 fp32→bf16 derived cast 瞬
@@ -54,3 +60,13 @@
   时丢参（`comfy_provider._set_deep` 已自动展开，模板初值保持点号形态）。
 - ComfyUI RandomNoise 等采样节点要求 seed ≥ 0：`seed=-1`（随机）由
   `models.eff_seed` 在编译期随机化，勿把 -1 直接注入图。
+- 音频 latent 的 `frame_rate` 必须由 manifest `audio_fps` 绑定 `gen["fps"]`
+  （t2v/i2v/flf2v/bbox 及 upscale 变体，2026-10-01 已统一）；模板字面量只是
+  初值，勿改回硬编码（flf2v 曾冻结在 24、其余 25，造成 A/V 映射跨 workflow 漂移）。
+- GPU 子进程环境必须剥离 `JAV_API_TOKEN`（第三方 ComfyUI 节点可执行任意代码；
+  ComfyUI 还额外剥 `JAV_CALLBACK_SECRET`）。ZIT worker 保留 callback 三件套但
+  同样不见 token。新增 backend spawn 时照抄该 scrub。
+- 调度器 `_finish` 是取消竞态的最后闸口（completed + cancel_requested → 落定
+  cancelled），勿在别处绕过它直接 set_status("completed")。取消路径的
+  `Path.unlink` 与 `_ingest_outputs` 共用 `_managed_roots`/`_contained` 白名单，
+  任何新增 callback 路径消费者都必须先过 containment。

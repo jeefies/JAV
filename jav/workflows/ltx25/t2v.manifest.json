@@ -7,6 +7,7 @@
     "num_frames": {"node": "8.inputs.length"},
     "audio_frames": {"node": "9.inputs.frames_number"},
     "fps": {"node": "7.inputs.frame_rate"},
+    "audio_fps": {"node": "9.inputs.frame_rate"},
     "video_fps": {"node": "19.inputs.fps"},
     "seed": {"node": "11.inputs.noise_seed"},
     "cfg": {"node": "12.inputs.cfg"}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 from pathlib import Path
 
@@ -152,21 +153,23 @@ async def get_job(job_id: str, request: Request):
     return _public(ctx, job)
 
 
-async def _cancel_one(ctx, jid: str) -> str:
-    """queued -> immediate cancelled; in-flight -> persisted soft cancel that
-    the scheduler finalizes at its next checkpoint (never silently dropped)."""
+async def _cancel_one(ctx, jid: str) -> tuple[str, bool]:
+    """-> (status, already_terminal). queued -> immediate cancelled; in-flight
+    -> persisted soft cancel that the scheduler finalizes at its next
+    checkpoint (never silently dropped). already_terminal distinguishes a job
+    that was/just became terminal (caller: 409) from a freshly accepted cancel."""
     job = ctx.store.get_job(jid)
     if not job:
-        return "not_found"
+        return "not_found", False
     if job["status"] in TERMINAL:
-        return job["status"]
+        return job["status"], True
     if ctx.store.cancel_queued(jid):
         ctx.bus.publish(jid, {"status": "cancelled"})
-        return "cancelled"
+        return "cancelled", False
     ctx.store.request_cancel(jid)
     if job["status"] == "running" and ctx.sup.backend:
         await ctx.sup.backend.cancel(jid)
-    return "cancelling"
+    return "cancelling", False
 
 
 @router.delete("/jobs/{job_id}")
@@ -177,10 +180,13 @@ async def cancel_job(job_id: str, request: Request):
         raise HTTPException(404, detail="job not found")
     if job["status"] in TERMINAL:
         raise HTTPException(409, detail=f"job already {job['status']}")
-    result = await _cancel_one(ctx, job_id)
+    result, already_terminal = await _cancel_one(ctx, job_id)
     if result == "not_found":
         raise HTTPException(404, detail="job not found")
-    if result in ("completed", "failed"):  # raced to terminal between the checks
+    # already_terminal: raced to a terminal state between the pre-check and the
+    # re-read (completed/failed/cancelled) -> genuine 409. A freshly accepted
+    # queued-cancel returns ("cancelled", False) and MUST answer 200.
+    if already_terminal:
         raise HTTPException(409, detail=f"job already {result}")
     return {"id": job_id, "status": result}
 
@@ -263,7 +269,7 @@ async def cancel_batch(batch_id: str, request: Request):
         raise HTTPException(404, detail="batch not found")
     result = {}
     for jid in b["jobs"]:
-        result[jid] = await _cancel_one(ctx, jid)
+        result[jid], _ = await _cancel_one(ctx, jid)
     return {"batch_id": batch_id, "result": result}
 
 
@@ -273,7 +279,8 @@ async def cancel_batch(batch_id: str, request: Request):
 # job, so they must never be callable by API clients — including anyone
 # reaching this port through a tunnel.
 def _check_callback(request: Request):
-    if request.headers.get("x-jav-callback", "") != config.CALLBACK_SECRET:
+    if not hmac.compare_digest(request.headers.get("x-jav-callback", ""),
+                               config.CALLBACK_SECRET):
         raise HTTPException(403, detail="invalid worker callback secret")
 
 

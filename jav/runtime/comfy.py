@@ -42,6 +42,11 @@ class ComfyBackend(BaseBackend):
         config.LOG_DIR.mkdir(parents=True, exist_ok=True)
         self.log_handle = open(config.LOG_DIR / f"comfyui.{self.profile.name}.log", "a+")
         env = os.environ.copy()
+        # Third-party custom nodes execute inside this process: never hand it
+        # the API bearer token (it could call back as the service owner);
+        # ComfyUI never posts callbacks, so its secret is scrubbed too.
+        env.pop("JAV_API_TOKEN", None)
+        env.pop("JAV_CALLBACK_SECRET", None)
         env.update({
             "HF_HOME": str(config.HF_HOME_DIR),
             "CUDA_VISIBLE_DEVICES": os.getenv("JAV_GPU_INDEX", "0"),
@@ -171,8 +176,10 @@ class ComfyBackend(BaseBackend):
                 paths = self._collect_outputs(entry["outputs"])
                 if paths:
                     return {"status": "success", "paths": paths, "error": None}
-        return {"status": "failed", "paths": [],
-                "error": f"job timed out after {timeout}s waiting on ComfyUI history"}
+        raise asyncio.TimeoutError(
+            f"job timed out after {timeout}s waiting on ComfyUI history")
+        # (TimeoutError routes through the scheduler's single timeout policy:
+        #  /interrupt + shutdown + retryable timeout — never silent generation_error)
 
     def _collect_outputs(self, outputs: dict) -> list[str]:
         paths = []

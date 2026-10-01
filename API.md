@@ -41,6 +41,13 @@
 已验证扩展语义：
 - `ltx25`：`generation.mode = "fast"`（默认，单段 distilled 8 步）| `"high"`
   （Two-Stage：低段生成 → latent x2 上采样 → 3 步 re-sampler，输出约 2× 分辨率；t2v/i2v/flf2v 支持（flf2v stage2 在 x2 上采样前 CropGuides 剥离关键帧 token，随后 re-anchor））
+- `ltx25` 输入槽位（2026-10-01 对齐公开文档）：i2v/flf2v 真名为 `first_image`/
+  `last_image`，**接受别名** `image` / `first_frame` / `last_frame`；`a2v` 的
+  时长由 `generation.duration`（默认 5s）决定——音频被 trim 到该时长，
+  **不会**自动跟随源音频长度；控制族中 `inpaint`/`outpaint`/`ic_lora` 允许
+  空 prompt，`union_control`/`motion_control` 必须带 prompt
+- `mh3` 输入槽位：i2v/fl2v 真名为 `first_frame`，i2v 接受别名 `image`；
+  `multiframe` 的 `reference_images`（1-9）为**必填**（ref2va base 图锚点）
 - **ltx25 IC-LoRA 控制族**（`union_control` / `motion_control` / `inpaint` /
   `outpaint` / `ic_lora`）：单段 distilled + IC-LoRA guide，**时长与画幅跟随源
   视频**（不接受 duration/width/height；`generation.strength` 0..1 控制 guide
@@ -119,8 +126,10 @@
 ### DELETE /v1/jobs/{id}
 - 排队中 → `{"status":"cancelled"}` 立即生效
 - 启动中/运行中 → `{"status":"cancelling"}`：取消意图**持久化**（`cancel_requested`），
-  调度器在下一个检查点（提交前 / 结果落地前 / 失败重试前）落定为
-  `cancelled` 并丢弃产物——不会出现“已接受取消但任务照常完成”。
+  调度器在下一个检查点（提交前 / 结果落地前 / 失败重试前 / 完成落定前）落定为
+  `cancelled` 并丢弃产物——不会出现“已接受取消但任务照常完成”（`_finish` 终态
+  兜底检查：已请求取消的任务永不以 completed 落定；极小竞态窗口内已按内容寻址
+  入库的产物文件会保留，不阻塞取消语义）。
   ComfyUI 侧同时 best-effort `/interrupt`
 - 已在终态 → 409
 - `GET /v1/jobs`：`limit` 钳制在 1..500，`offset` ≥0（越界参数自动修正而非透传 SQL）
@@ -154,11 +163,13 @@
   queued_total, admission_backoff}`
 - `GET /v1/runtime` — 当前 runtime 进程/RAM/swap/VRAM 指标 + 最近切换事件
 - `POST /v1/runtime/keepalive` — 刷新空闲卸载计时器，让当前 runtime 继续驻留
-  （可选 `?ttl_s=` 临时延长本轮窗口，上限 7200s）；返回
+  （可选 `?ttl_s=` 临时延长本轮窗口，钳制 1..7200s；非法/负值按 1s，不会反向
+  触发立即卸载）；返回
   `{kept_alive, state, idle_unload_in_s}`。无活跃 runtime 时返回
   `{kept_alive: null}`，下个任务照常冷启动
 - `POST /v1/runtime/unload` — 立即释放 active runtime（不等空闲超时），
-  返回卸载前 profile 与队列快照
+  返回卸载前 profile 与队列快照；**有 starting_runtime/running 任务时 409**
+  （绝不中途打断在途任务；先 cancel）
 - `GET /v1/health` — liveness
 
 ## 调度语义

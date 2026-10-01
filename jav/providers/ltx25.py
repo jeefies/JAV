@@ -110,7 +110,9 @@ def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
         raise ProviderError(f"ltx25: unknown workflow {workflow}")
     prompt = str(inputs.get("prompt", "")).strip()
     if workflow in ALLOWED_LORAS:
-        if not prompt and workflow != "bbox_control":
+        # prompt-guided control families; inpaint/outpaint/ic_lora may run
+        # prompt-free (source/mask driven) per the published contract
+        if not prompt and workflow in ("union_control", "motion_control"):
             raise ProviderError("ltx25: prompt is required")
         return _normalize_control(workflow, inputs, generation, prompt)
     if not prompt and workflow != "bbox_control":
@@ -125,13 +127,16 @@ def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
         raise ProviderError("ltx25: mode must be 'fast' or 'high'")
     assets = {}
     if workflow in ("i2v", "flf2v"):
-        if not inputs.get("first_image"):
+        fi = (inputs.get("first_image") or inputs.get("first_frame")
+              or inputs.get("image"))  # docs aliases
+        if not fi:
             raise ProviderError(f"ltx25.{workflow}: first_image asset required")
-        assets["first_image"] = inputs["first_image"]
+        assets["first_image"] = fi
     if workflow == "flf2v":
-        if not inputs.get("last_image"):
-            raise ProviderError("ltx25.flf2v: last_image asset required")
-        assets["last_image"] = inputs["last_image"]
+        li = inputs.get("last_image") or inputs.get("last_frame")  # docs alias
+        if not li:
+            raise ProviderError("ltx25.flf2v: last_image (or last_frame) asset required")
+        assets["last_image"] = li
     if workflow == "a2v":
         if not inputs.get("audio"):
             raise ProviderError("ltx25.a2v: audio asset required")
@@ -182,7 +187,7 @@ def _control_params(payload: dict) -> dict:
     if payload["workflow"] == "ic_lora" and payload["mode"] == "reference":
         params.update({"length": gen["num_frames"], "audio_frames": gen["num_frames"],
                        "repeat_amount": gen["num_frames"], "fps_video": gen["fps"],
-                       "cond_fps": gen["fps"]})
+                        "cond_fps": gen["fps"], "audio_fps": gen["fps"]})
     if "canny" in payload:
         params["canny_low"], params["canny_high"] = payload["canny"]
     if "spatial_radius" in payload:
@@ -201,7 +206,7 @@ def compile(payload: dict, asset_paths: dict[str, str], output_dir, base_dir) ->
         graph = comfy_provider.compile_graph(
             "ltx25", tpl, _control_params(payload),
             asset_names={slot: f"asset:{slot}" for slot in asset_paths})
-        return {"graph": graph, "asset_paths": asset_paths, "output_kinds": ["video"]}
+        return {"graph": graph, "asset_paths": asset_paths}
     gen = payload["generation"]
     if payload["workflow"] == "bbox_control":
         high = payload.get("mode") == "high"
@@ -213,6 +218,7 @@ def compile(payload: dict, asset_paths: dict[str, str], output_dir, base_dir) ->
             "audio_frames": gen["num_frames"],
             "width_up": gen["width"] * 2, "height_up": gen["height"] * 2,
             "fps": gen["fps"], "animator_fps": gen["fps"], "video_fps": gen["fps"],
+            "audio_fps": gen["fps"],
             "seed": eff_seed(gen), "cfg": gen["cfg"],
             "negative_prompt": payload["negative_prompt"],
             "regional_weight": gen.get("regional_weight", 0.85),
@@ -220,13 +226,14 @@ def compile(payload: dict, asset_paths: dict[str, str], output_dir, base_dir) ->
         }
         tpl = "bbox_control.upscale" if high else "bbox_control"
         graph = comfy_provider.compile_graph("ltx25", tpl, params)
-        return {"graph": graph, "asset_paths": {}, "output_kinds": ["video"]}
+        return {"graph": graph, "asset_paths": {}}
     params = {
         "prompt": payload["prompt"],
         "negative_prompt": payload["negative_prompt"],
         "width": gen["width"], "height": gen["height"],
         "num_frames": gen["num_frames"], "audio_frames": gen["num_frames"],
-        "fps": gen["fps"], "video_fps": gen["fps"], "seed": eff_seed(gen), "cfg": gen["cfg"],
+        "fps": gen["fps"], "video_fps": gen["fps"], "audio_fps": gen["fps"],
+        "seed": eff_seed(gen), "cfg": gen["cfg"],
         "video_cfg": gen["cfg"], "audio_cfg": gen["cfg"],
         "strength": gen["strength"], "strength2": gen["strength"],
         "width_img": gen["width"], "height_img": gen["height"],
@@ -237,8 +244,7 @@ def compile(payload: dict, asset_paths: dict[str, str], output_dir, base_dir) ->
     graph = comfy_provider.compile_graph(
         "ltx25", _template_for(payload), params,
         asset_names={slot: f"asset:{slot}" for slot in asset_paths})
-    return {"graph": graph, "asset_paths": asset_paths,
-            "output_kinds": comfy_provider.output_kinds("ltx25", _template_for(payload))}
+    return {"graph": graph, "asset_paths": asset_paths}
 
 
 def _template_for(payload: dict) -> str:

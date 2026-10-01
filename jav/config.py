@@ -47,15 +47,14 @@ CALLBACK_SECRET = os.getenv("JAV_CALLBACK_SECRET") or secrets.token_hex(16)
 # admission uses live MemAvailable+SwapFree; keep a hard floor so JAV never
 # pushes the box into OOM-killer territory.
 MEM_FLOOR_MB = int(os.getenv("JAV_MEM_FLOOR_MB", "4096"))
-# 2026-10-01 VRAM OOM postmortem: unichess app.py (~916MiB persistent) + Kit
-# selfplay (~1.16GiB transient) share GPU 0 with JAV and can GROW AFTER the
-# admission snapshot; the ZIT worker's true peak is ~13.4GiB. A thin 256MiB
-# floor let admission pass and then OOM on the last 186MiB alloc. Floor now
-# 1536MiB to cover typical external coexistence; when selfplay spikes above
-# that, admission correctly backs the job off (queued, 15s..4min) instead of
-# burning a doomed cold-start + retry. expandable_segments (set pre-torch in
-# zit_worker + comfy env) additionally reclaims the ~640MiB fragmentation.
-VRAM_FLOOR_MB = int(os.getenv("JAV_VRAM_FLOOR_MB", "1536"))
+# VRAM floor must cover the EXTERNAL (unmanaged) usage that races admission:
+# unichess app.py (~916MiB persistent) + Kit selfplay (~1.16->1.4GiB, GROWS
+# after the spawn-time snapshot; measured live 2026-10-01). 256 was too thin
+# (real OOM); budgets must equal the honest measured worker peak, floor = the
+# external growth allowance on top. With expandable_segments active (pre-torch
+# in zit_worker) the ZIT true peak drops ~0.6G; 13312+768 keeps today's
+# knife-edge cases queued instead of burning a doomed cold-start + retry.
+VRAM_FLOOR_MB = int(os.getenv("JAV_VRAM_FLOOR_MB", "768"))
 ADMISSION_BACKOFF_S = (15, 30, 60, 120, 240)
 
 
@@ -110,7 +109,7 @@ def default_profiles() -> dict[str, Profile]:
             # observed peak 29.2G RSS during i2i/inpaint fp32->bf16 derived
             # cast (resident bf16 ~20G + temporary fp32 checkpoint copy);
             # 20480 under-budgeted the peak and thrashed against the cgroup cap
-            ram_budget_mb=30720, vram_budget_mb=12800,
+            ram_budget_mb=30720, vram_budget_mb=13312,
             start_timeout_s=600, job_timeout_s=900,
             idle_unload_s=int(os.getenv("JAV_ZIT_IDLE_UNLOAD_S", "300")),
             python_bin=os.getenv("ZIT_PYTHON_BIN", CONDA_IMAGE_PY),
@@ -118,21 +117,21 @@ def default_profiles() -> dict[str, Profile]:
         ),
         "ltx25": Profile(
             name="ltx25", backend="comfyui",
-            ram_budget_mb=24576, vram_budget_mb=11264,
+            ram_budget_mb=24576, vram_budget_mb=12288,
             start_timeout_s=420, job_timeout_s=2400, idle_unload_s=300,
             python_bin=os.getenv("LTX_PYTHON_BIN", CONDA_COMFYUI_PY),
             required_nodes=("LTXVConditioning", "LTXVScheduler", "EmptyLTXVLatentVideo"),
         ),
         "mh3.fl2va": Profile(
             name="mh3.fl2va", backend="comfyui",
-            ram_budget_mb=28672, vram_budget_mb=11264,
+            ram_budget_mb=28672, vram_budget_mb=12288,
             start_timeout_s=600, job_timeout_s=3600, idle_unload_s=300,
             python_bin=os.getenv("MH3_PYTHON_BIN", CONDA_COMFYUI_PY),
             required_nodes=("MiniMaxH3ImageToVideo",),
         ),
         "mh3.ref2va": Profile(
             name="mh3.ref2va", backend="comfyui",
-            ram_budget_mb=28672, vram_budget_mb=11264,
+            ram_budget_mb=28672, vram_budget_mb=12288,
             start_timeout_s=600, job_timeout_s=3600, idle_unload_s=300,
             python_bin=os.getenv("MH3_PYTHON_BIN", CONDA_COMFYUI_PY),
             required_nodes=("MiniMaxH3ReferenceToVideo",),

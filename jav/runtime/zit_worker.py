@@ -8,6 +8,15 @@ Protocol (unchanged in spirit):
          POST $JAV_CALLBACK         {"job_id": ..., "status": "processing"|"success"|"failed", ...}
 """
 import os
+
+# MUST be set before torch is imported/initialized: without expandable_segments
+# the caching allocator fragments (measured 640MB reserved-unallocated wasted
+# at peak, contributing to a real VRAM OOM on 2026-10-01 under unichess
+# coexistence). PYTORCH_CUDA_ALLOC_CONF is read at CUDA init, not at first
+# allocation — a later setdefault in main() had NO effect.
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import sys
 import json
 import gc
@@ -155,8 +164,6 @@ def run_task(pipe, derive, task):
 
 
 def main():
-    os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
-    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     try:
         flags = fcntl.fcntl(sys.stdin.fileno(), fcntl.F_GETFL)
         fcntl.fcntl(sys.stdin.fileno(), fcntl.F_SETFL, flags | os.O_NONBLOCK)

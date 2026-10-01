@@ -50,6 +50,9 @@ class ComfyBackend(BaseBackend):
         env.update({
             "HF_HOME": str(config.HF_HOME_DIR),
             "CUDA_VISIBLE_DEVICES": os.getenv("JAV_GPU_INDEX", "0"),
+            # same allocator policy as the ZIT worker (see AGENTS.md 已知坑):
+            # measured comfy worker exceeded its budget partly to fragmentation
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
         })
         cmd = [self.profile.python_bin, "-u", str(config.COMFYUI_DIR / "main.py"),
                "--listen", "127.0.0.1", "--port", str(self.port),

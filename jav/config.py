@@ -47,7 +47,15 @@ CALLBACK_SECRET = os.getenv("JAV_CALLBACK_SECRET") or secrets.token_hex(16)
 # admission uses live MemAvailable+SwapFree; keep a hard floor so JAV never
 # pushes the box into OOM-killer territory.
 MEM_FLOOR_MB = int(os.getenv("JAV_MEM_FLOOR_MB", "4096"))
-VRAM_FLOOR_MB = int(os.getenv("JAV_VRAM_FLOOR_MB", "256"))
+# 2026-10-01 VRAM OOM postmortem: unichess app.py (~916MiB persistent) + Kit
+# selfplay (~1.16GiB transient) share GPU 0 with JAV and can GROW AFTER the
+# admission snapshot; the ZIT worker's true peak is ~13.4GiB. A thin 256MiB
+# floor let admission pass and then OOM on the last 186MiB alloc. Floor now
+# 1536MiB to cover typical external coexistence; when selfplay spikes above
+# that, admission correctly backs the job off (queued, 15s..4min) instead of
+# burning a doomed cold-start + retry. expandable_segments (set pre-torch in
+# zit_worker + comfy env) additionally reclaims the ~640MiB fragmentation.
+VRAM_FLOOR_MB = int(os.getenv("JAV_VRAM_FLOOR_MB", "1536"))
 ADMISSION_BACKOFF_S = (15, 30, 60, 120, 240)
 
 

@@ -54,6 +54,14 @@
   直至释放，属预期行为，不要为此加重试逻辑。
 - ZIT derived pipeline（i2i/inpaint）首次使用需 fp32→bf16 全量 cast，首任务比
   t2i 慢数分钟，属正常。
+- **VRAM 与 unichess 同卡共存（2026-10-01 OOM 复盘）**：unichess 的 `app.py`
+  （~916MiB 常驻）与 `Kit selfplay`（~1.16GiB，会增长）都占用 GPU 0，不在 JAV
+  互斥锁管辖内。ZIT worker 真实 VRAM 峰值 ~13.4GiB（budget 12800 偏乐观）。
+  防线：`VRAM_FLOOR_MB=1536`（自 256 上调，覆盖外部共存的 TOCTOU 增长窗口）+
+  `expandable_segments`（**必须在 `import torch` 之前设置**，zit_worker 顶部；
+  main() 里 setdefault 无效，曾因此白烧 640MiB 碎片）。selfplay 活跃期 zit
+  准入会持续退避排队（预期行为，勿"优化"成放行）；显存侧与 RAM 侧同理：
+  预算=实测峰值，地板=外部增长余量。
 - ComfyUI **v3 io 节点的 DynamicCombo**（如 ResizeImageMaskNode 的 resize_type）
   在 API prompt 里的合法形态是 `"resize_type": "<选项字符串>"` +
   `"resize_type.<子字段>": value` 点号键；写成嵌套 dict 会通过验证但在 execute

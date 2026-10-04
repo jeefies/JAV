@@ -156,8 +156,16 @@ class ComfyBackend(BaseBackend):
             await asyncio.sleep(POLL_INTERVAL_S)
 
             def _hist():
-                r = requests.get(f"{self.base}/history/{prompt_id}", timeout=10)
-                return r.json() if r.status_code == 200 else {}
+                # transient stalls (dynamic-VRAM streaming / heavy sync ops can
+                # block ComfyUI's HTTP loop for seconds) must never abort a
+                # live generation: swallow and keep polling, job_timeout is
+                # the real bound (2026-10-02: a 10s read-timeout here mislabeled
+                # a healthy 5s-i2v run as internal_error and requeued it)
+                try:
+                    r = requests.get(f"{self.base}/history/{prompt_id}", timeout=30)
+                    return r.json() if r.status_code == 200 else {}
+                except (requests.RequestException, ValueError):
+                    return {}
             hist = await poll(_hist)
             entry = hist.get(prompt_id)
             if not entry:

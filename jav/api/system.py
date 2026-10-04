@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse
 
 from .. import capabilities, config, voices as voices_mod
 from ..runtime.supervisor import mem_available_mb, vram_pids
@@ -132,6 +134,33 @@ async def register_voice(request: Request):
         raise HTTPException(e.status, detail=str(e))
     return {"id": v["id"], "name": v["name"], "registered": True,
             "source": "asset", "description": v["description"]}
+
+
+_SAMPLE_MIME = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".flac": "audio/flac",
+                ".ogg": "audio/ogg", ".m4a": "audio/mp4"}
+
+
+@router.get("/voices/{voice_id}/sample")
+async def voice_sample(voice_id: str, request: Request):
+    """参考干声试听：前端音色表/文档用它播放，不暴露路径（只按注册表解析）。"""
+    ctx = request.app.ctx
+    try:
+        registry = voices_mod.load_voices()
+    except voices_mod.VoiceError as e:
+        raise HTTPException(e.status, detail=str(e))
+    v = registry.get(voice_id)
+    if v is None:
+        raise HTTPException(404, detail="voice not found")
+    path = None
+    if v["asset"]:
+        asset = ctx.store.get_asset(v["asset"])
+        path = asset["path"] if asset else None
+    else:
+        path = v["path"]
+    if not path or not Path(path).exists():
+        raise HTTPException(410, detail="reference audio file missing")
+    media = _SAMPLE_MIME.get(Path(path).suffix.lower()) or "application/octet-stream"
+    return FileResponse(path, media_type=media, filename=Path(path).name)
 
 
 @router.get("/health")

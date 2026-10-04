@@ -221,3 +221,24 @@ def test_voices_api(app_client, registry):
         "generation": {"seed": 7}})
     assert job.status_code == 201, job.text
     (config.BASE_DIR / "config" / "voices.yaml").unlink(missing_ok=True)
+
+
+def test_voice_sample_endpoint(app_client, registry):
+    # asset 型：注册后即可试听，内容与资产字节一致
+    a = app_client.post("/v1/assets?kind=audio", content=b"RIFFaud",
+                        headers={"x-filename": "qy.wav"})
+    aid = a.json()["id"]
+    voices.upsert_voice({"id": "qy-s", "asset": aid, "prompt_text": "稿。"})
+    r = app_client.get("/v1/voices/qy-s/sample")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("audio/wav")
+    assert r.content == b"RIFFaud"
+    # path 型：文件缺失 410，存在则原样返回
+    assert app_client.get("/v1/voices/teacher/sample").status_code == 410
+    p = config.DATA_DIR / "refs/teacher.wav"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"wavdata")
+    r3 = app_client.get("/v1/voices/teacher/sample")
+    assert r3.status_code == 200 and r3.content == b"wavdata"
+    assert app_client.get("/v1/voices/ghost/sample").status_code == 404
+    p.unlink(missing_ok=True)

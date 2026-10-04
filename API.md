@@ -174,6 +174,8 @@
   权重在盘 × 模板实现 × 硬件 smoke 标志动态计算；`reason` 说明不可用原因
 - `GET /v1/voices` — cosyvoice 角色音色注册表（id/name/description/source，
   不泄漏参考路径）
+- `GET /v1/voices/{id}/sample` — 该音色的参考干声试听（FileResponse，按注册表解析
+  asset/path，不拼接请求参数；未注册 404，素材缺失 410）
 - `POST /v1/voices` — 注册/替换音色（Bearer）：`{id, name?, prompt_asset(kind=audio
   资产 id), prompt_text(逐字稿), description?}`；写 `config/voices.yaml`（原子替换），
   即时生效无需重启。文件路径型条目直接编辑 voices.yaml 的 `path:`（须在 /mnt/data/AV 内）

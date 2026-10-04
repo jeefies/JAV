@@ -173,11 +173,37 @@ IC-LoRA 控制族（union_control/motion_control/inpaint/outpaint/ic_lora）：�
 
 立即释放当前驻留模型（不等空闲超时）。返回卸载前的 profile 与队列快照。有任务处于 `starting_runtime`/`running` 时返回 **409**（绝不中途打断在途任务；需先取消对应任务）。
 
-### 4.7 `GET /v1/voices` · `POST /v1/voices`
+### 4.7 `GET /v1/voices` · `POST /v1/voices` · `GET /v1/voices/{id}/sample`
 
 `t2a` 角色音色列表：`{ "voices": [ { "id", "name", "description", "source": "asset"|"file" } ] }`（不含参考音频路径与逐字稿）。
 
+`GET /v1/voices/{id}/sample` 返回该音色的**参考干声**（`audio/wav` 等，供试听）；未注册 404，素材文件缺失 410。
+
 `POST /v1/voices`（Bearer）注册/替换音色：`{ "id": "qiyuan", "name": "齐远", "prompt_asset": "<audio asset_id>", "prompt_text": "<参考音频逐字稿>", "description": "" }`。`prompt_asset` 必须是已上传的 `kind=audio` 资产（10–15s 单人无混响干声）。注册即时生效，无需重启。
+
+#### 当前可用音色
+
+| voice_id | 名称 | 状态 |
+|---|---|---|
+| `demo-zh-f` | 示例女声（CosyVoice 官方 zero-shot 素材） | ✅ 已注册，可试听：`GET /v1/voices/demo-zh-f/sample` |
+| `jiwei` 纪伟 | 20–25 岁男声，中音偏低，朴素自然（旁白同音色） | ⏳ 待注册（需授权参考干声） |
+| `qiyuan` 齐远 | 20–25 岁男声，比纪伟稍明亮清晰 | ⏳ 待注册 |
+| `teacher` 叶老师 | 45–60 岁男声，中低音有厚度 | ⏳ 待注册 |
+| `shun` 顺哥 | 青年男声，平稳自信 | ⏳ 待注册 |
+| `admin-a` 管理员甲 | 清晰青年女声 | ⏳ 待注册 |
+| `admin-b` 管理员乙 | 稍低稍稳成年女声 | ⏳ 待注册 |
+
+以 `GET /v1/voices` 实时返回为准；后六个为《公示期》计划角色 ID，注册后即出现在列表中。
+
+#### 自定义音色流程
+
+1. **准备素材**：目标角色 10–15 秒普通话**干声**（单人、无 BGM/混响、正常交谈语气）＋ 与音频完全一致的逐字稿。素材必须来自授权演员或授权音色库。
+2. **上传**：`POST /v1/assets?kind=audio`（raw body 或 `/v1/assets/upload` multipart），记下返回的资产 `id`。
+3. **注册**：`POST /v1/voices` 带 `{id, name, prompt_asset, prompt_text}`。`id` 规则 `[a-z0-9][a-z0-9_-]{0,31}`；同名再提交为**覆盖替换**。也可直接编辑服务端 `config/voices.yaml` 的 `path:` 字段（盘内路径型，须在 `/mnt/data/AV` 下）。
+4. **试听验证**：`GET /v1/voices/{id}/sample` 回听参考素材；再用该 `voice_id` 提交一两句 `t2a` 小样。
+5. **未注册先试听（内联）**：跳过第 3 步，直接在任务里传 `reference_audio`+`reference_text`（成对），适合多段候选素材横向比声；不写注册表。
+
+发音定制补充：多音字/专名在 `text` 内联拼音标记（官方语法 `[j][ǐ]`）；表演（情绪/语气/轻重音/方言）用 `instruction`，两者都不改动台词本身。
 
 
 ## 5. 调度与可靠性语义（调用方可依赖的行为）

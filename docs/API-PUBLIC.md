@@ -17,7 +17,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `provider` | string | 是 | `zit` \| `ltx25` \| `mh3` |
+| `provider` | string | 是 | `zit` \| `ltx25` \| `mh3` \| `cosyvoice` |
 | `workflow` | string | 是 | 见 §1.2 workflow 参数表 |
 | `inputs` | object | 是 | workflow 专属输入（prompt、asset_id 引用等） |
 | `generation` | object | 否 | `width`/`height`/`steps`/`guidance`/`strength`/`seed`/`duration`/`fps` 等，按 workflow 取用 |
@@ -42,7 +42,7 @@
   "created_at": "…", "started_at": "…", "finished_at": null,
   "error": null, "error_type": null, "retry_count": 0, "queue_position": 3,
   "outputs": [ { "id": "out_…", "kind": "image|video|audio", "asset_id": "asset_…",
-                 "url": "/v1/jobs/job_…/output?asset_id=out_…" } ] }
+                 "url": "/v1/jobs/job_…/output?asset_id=out_…", "duration_s": 2.36 } ] }
 ```
 
 状态机：`queued → starting_runtime → running → completed | failed | cancelled`；服务端故障重启后在途任务自动回到 `queued`。
@@ -68,6 +68,14 @@
 | `mh3.ref2v` | `prompt`, `reference_images`（1–9 张） | `turbo` | 同上 |
 | `mh3.fun_control` | `prompt`, `control_video` | `control_strength`（默认 1.0，控制 canny/depth/pose/hed 风格视频） | 同上，默认 20 步 |
 | `mh3.multiframe` | `prompt`, `keyframes`（`[{image|video, time}]`，≤8，`time` 秒）, `reference_images`（1–9） | `turbo` | 同上，默认 20 步 |
+| `cosyvoice.t2a` | `text`（≤5000 字符，逐字朗读）, `voice_id`（`GET /v1/voices`）或 `reference_audio`+`reference_text`（内联试听） | `instruction`（表演指令，自然语言）, `text_frontend`（bool，默认 true） | `speed`（0.5–2.0，默认 1.0）/`sample_rate`（默认 48000）/`seed`（默认 42，确定性可缓存；-1 随机） |
+
+`cosyvoice.t2a`（配音/对白干声，CosyVoice3）：
+- 输出 **WAV 单声道 PCM**，默认 48kHz；`outputs[].duration_s` 为音频实际时长（不截断台词，时长为生成结果）
+- `instruction` 与 `text` 严格分离：指令只控制表演（语气/情绪/轻重音/方言，官方支持集见服务端），**永远不会被朗读**，也不会改写台词。传入含 `<|endofprompt|>` 的原文则按官方指令格式透传
+- 多音字/专名发音：直接在 `text` 中内联拼音标记（如 `[j][ǐ]`），英文缩写支持原生文本归一
+- 同一 `voice_id` 跨句、跨场音色一致；`reference_audio`+`reference_text` 用于正式注册前的选声试听
+- `seed >= 0`（默认 42）时命中幂等缓存：相同文本+音色+指令+参数直接复用既有音频
 
 ltx25 通用扩展：`generation.mode = "fast"`（默认）| `"high"`（两段式高清，输出约 2× 分辨率，耗时更长；仅 t2v/i2v/flf2v）。
 IC-LoRA 控制族（union_control/motion_control/inpaint/outpaint/ic_lora）：时长与画幅**跟随源视频/参考图**；`inputs.shorter_size` 128..768 且为 32 的倍数（默认 512）；`generation.strength` 0..1（guide 强度，默认 1.0）。
@@ -164,6 +172,13 @@ IC-LoRA 控制族（union_control/motion_control/inpaint/outpaint/ic_lora）：�
 ### 4.6 `POST /v1/runtime/unload`
 
 立即释放当前驻留模型（不等空闲超时）。返回卸载前的 profile 与队列快照。有任务处于 `starting_runtime`/`running` 时返回 **409**（绝不中途打断在途任务；需先取消对应任务）。
+
+### 4.7 `GET /v1/voices` · `POST /v1/voices`
+
+`t2a` 角色音色列表：`{ "voices": [ { "id", "name", "description", "source": "asset"|"file" } ] }`（不含参考音频路径与逐字稿）。
+
+`POST /v1/voices`（Bearer）注册/替换音色：`{ "id": "qiyuan", "name": "齐远", "prompt_asset": "<audio asset_id>", "prompt_text": "<参考音频逐字稿>", "description": "" }`。`prompt_asset` 必须是已上传的 `kind=audio` 资产（10–15s 单人无混响干声）。注册即时生效，无需重启。
+
 
 ## 5. 调度与可靠性语义（调用方可依赖的行为）
 

@@ -25,6 +25,17 @@ config.ZIT_WEIGHTS_DIR = config.DATA_DIR / "fake_zit_weights"
 config.ZIT_WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
 (config.ZIT_WEIGHTS_DIR / "model_index.json").write_text("{}")
 
+# Fake CosyVoice3 install so the t2a capability gate passes in tests
+config.COSYVOICE_REPO_DIR = config.DATA_DIR / "fake_cv_repo"
+(config.COSYVOICE_REPO_DIR / "cosyvoice").mkdir(parents=True, exist_ok=True)
+(config.COSYVOICE_REPO_DIR / "third_party" / "Matcha-TTS").mkdir(parents=True, exist_ok=True)
+config.COSYVOICE_WEIGHTS_DIR = config.DATA_DIR / "fake_cv_weights"
+config.COSYVOICE_WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+for _f in ("cosyvoice3.yaml", "llm.pt", "flow.pt", "hift.pt",
+           "campplus.onnx", "speech_tokenizer_v3.onnx"):
+    (config.COSYVOICE_WEIGHTS_DIR / _f).write_text("{}")
+(config.COSYVOICE_WEIGHTS_DIR / "CosyVoice-BlankEN").mkdir(exist_ok=True)
+
 config.OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -74,16 +85,27 @@ class FakeBackend:
             if not FakeBackend.release:
                 return {"status": "failed", "paths": [], "error": "wait deadline",
                         "error_type": "timeout"}
-            return {"status": "success", "paths": [], "error": "released-cancel",
-                    "cancel_requested": True}
+            # mirror ZitBackend._resolve: the flag reflects an ACTUAL cancel
+            # call, never a blanket True (hard-coded True made the
+            # unload-guard test unresolvable: 2026-10-04)
+            return {"status": "success", "paths": [], "error": None,
+                    "cancel_requested": job_id in self.cancelled}
         import hashlib
-        data = f"png-bytes-{job_id}".encode()
+        task = self.submitted[-1][1]
+        is_tts = task.get("mode") == "t2a"
+        ext = ".wav" if is_tts else ".png"
+        label = "wav-bytes" if is_tts else "png-bytes"
+        data = f"{label}-{job_id}".encode()
         sha = hashlib.sha256(data).hexdigest()
         d = config.OUTPUTS_DIR / sha[:2]
         d.mkdir(parents=True, exist_ok=True)
-        p = d / f"{job_id}.png"
+        p = d / f"{job_id}{ext}"
         p.write_bytes(data)
-        return {"status": "success", "paths": [str(p)], "error": None}
+        res = {"status": "success", "paths": [str(p)], "error": None}
+        if is_tts:
+            res["meta"] = {"duration_s": 2.5, "sample_rate": 48000,
+                           "mode": "zero_shot", "voice_id": task.get("voice_id")}
+        return res
 
     async def cancel(self, job_id):
         self.cancelled.append(job_id)
@@ -124,7 +146,7 @@ def app_client(fresh_store):
     FakeBackend.release = False
 
     profiles = sup_mod.config.load_profiles()
-    for name in ("zit", "ltx25", "mh3.fl2va", "mh3.ref2va"):
+    for name in ("zit", "ltx25", "mh3.fl2va", "mh3.ref2va", "cosyvoice"):
         profiles[name].backend = "fake"
 
     store = Store()

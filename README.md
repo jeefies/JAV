@@ -43,7 +43,7 @@ python3 tools/verify_weights.py         # 全部权重（registry 47 项 ~153G�
 - LTX：`/mnt/data/AV/ComfyUI/models/{checkpoints,diffusion_models,...}`（2.5 distilled int8 + 控制 LoRA 全量在盘）
 - MH3：`ComfyUI/models/` int8-convrot 套件 + turbo/fun-control LoRA
 
-## 当前状态（2026-09-30）
+## 当前状态（2026-10-04）
 
 | Profile | 权重 | E2E |
 |---|---|---|
@@ -51,8 +51,9 @@ python3 tools/verify_weights.py         # 全部权重（registry 47 项 ~153G�
 | ltx25 | ✅ LTX-2.5 distilled int8-convrot 38.7G + latent upscalers 1.26G + bbox IC-LoRA 0.33G + **5 控制 LoRA**（union-control 2.3 / clean-plate / slow-motion / ingredients / cinemagraph 2.5，共 1.9G） | ✅ t2v / i2v / flf2v / a2v / **bbox_control** 首验出片；`generation.mode:"high"` = Two-Stage（latent x2 + 3步 re-sampler）t2v/i2v/flf2v 已验证，bbox HD 实测 1536×896 出片；**控制族 6 图（union/motion/inpaint/outpaint/ic_lora×2 mode）全部真实出片**（官方 2.5 UI 样例 subgraph 展开重写，时长画幅跟随源视频） |
 | mh3.fl2va | ✅ pruned int8-convrot + nvfp4 TE + 双 VAE ~50.5G + turbo LoRA 2.0G | ✅ t2v / i2v / fl2v / multiframe(含 video 关键帧=continuation) 首验出片，capability 已点亮 |
 | mh3.ref2va | ✅ ref2va pruned int8 21G + turbo LoRA 2.0G + fun-controlnet union int8 6.8G（2.0 + 原版） | ✅ ref2v（双参考图 Autogrow）与 **fun_control**（ModelPatch controlnet）首验出片，capability 已点亮 |
+| cosyvoice | ✅ Fun-CosyVoice3-0.5B-2512 9.1G（/mnt/data/AV/models/Fun-CosyVoice3-0.5B；worker 用独立 venv `/mnt/data/AV/venvs/cosyvoice`，torch 2.7.1+cu128——上游 pin 2.3.1 不支持本机 sm_120） | ✅ t2a 冒烟 3/3（plain/instruct2/内联试听+speed，48kHz mono PCM + duration_s + 缓存命中，VRAM 实测 3.7G / RSS 6.7G，见 `tools/cosyvoice_smoke.py`） |
 
-19/19 工作流 available。**真实生成回归**：`tools/live_e2e.py`（对运行中的服务走
+20/20 工作流 available。**真实生成回归**：`tools/live_e2e.py`（对运行中的服务走
 HTTP + SDK，产物用 PIL/ffprobe 做内容级断言，分阶段 `--stage zit,ltx25,control,mh3`）；
 新工作流首验用 `tools/first_validation.py`（单项）或 `tools/batch_first_validation.py`
 （多项同进程批量，共享一次 ComfyUI 冷启动）——两者都走 in-process 生产路径并自动

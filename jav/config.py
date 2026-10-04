@@ -21,6 +21,13 @@ LOG_DIR = Path(os.getenv("JAV_LOG_DIR", BASE_DIR / "logs"))
 
 ZIT_WEIGHTS_DIR = Path(os.getenv("ZIT_WEIGHTS_DIR", "/mnt/data/AV/models/Z-Image-Turbo"))
 COMFYUI_DIR = Path(os.getenv("JAV_COMFYUI_DIR", "/mnt/data/AV/ComfyUI"))
+# CosyVoice3 TTS (配音 t2a): official repo checkout + downloaded model dir,
+# worker interpreter is a SEPARATE venv (torch 2.3.1+cu121 pinned by upstream;
+# must not pollute the unified comfyui env).
+COSYVOICE_REPO_DIR = Path(os.getenv("COSYVOICE_REPO_DIR", "/mnt/data/AV/CosyVoice"))
+COSYVOICE_WEIGHTS_DIR = Path(os.getenv("COSYVOICE_WEIGHTS_DIR",
+                                      "/mnt/data/AV/models/Fun-CosyVoice3-0.5B"))
+COSYVOICE_PYTHON_BIN = os.getenv("COSYVOICE_PYTHON_BIN", "/mnt/data/AV/venvs/cosyvoice/bin/python")
 # Unified env (2026-09-30): JAV server + ZIT worker + ComfyUI backend all run
 # on /home/jeefy/miniconda3/envs/comfyui (py3.11, torch 2.11+cu130,
 # diffusers git@50e7158, fastapi stack). Legacy openclaw-home image env retired.
@@ -135,6 +142,18 @@ def default_profiles() -> dict[str, Profile]:
             start_timeout_s=600, job_timeout_s=3600, idle_unload_s=300,
             python_bin=os.getenv("MH3_PYTHON_BIN", CONDA_COMFYUI_PY),
             required_nodes=("MiniMaxH3ReferenceToVideo",),
+        ),
+        "cosyvoice": Profile(
+            name="cosyvoice", backend="cosyvoice_subprocess",
+            # 0.5B LLM + flow + hift (fp32), budgets pending post-smoke
+            # calibration (same rule as zit: budget = measured peak, floor =
+            # external growth). TTS lines are seconds-cheap; job_timeout kept
+            # modest so a hung worker is recycled fast.
+            ram_budget_mb=12288, vram_budget_mb=6144,
+            start_timeout_s=300, job_timeout_s=600,
+            idle_unload_s=int(os.getenv("JAV_TTS_IDLE_UNLOAD_S", "300")),
+            python_bin=COSYVOICE_PYTHON_BIN,
+            script=str(BASE_DIR / "jav" / "runtime" / "cosyvoice_worker.py"),
         ),
     }
 

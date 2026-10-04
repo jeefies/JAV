@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from .. import config
 from ..models import PROVIDER_WORKFLOWS, ProviderError
-from . import ltx25, mh3, zit
+from . import cosyvoice, ltx25, mh3, zit
 
-PROVIDERS = {"zit": zit, "ltx25": ltx25, "mh3": mh3}
+PROVIDERS = {"zit": zit, "ltx25": ltx25, "mh3": mh3, "cosyvoice": cosyvoice}
 
 
 def resolve_profile(provider: str, workflow: str) -> str:

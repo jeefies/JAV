@@ -216,7 +216,7 @@ class Scheduler:
         if result.get("status") == "success":
             try:
                 await asyncio.to_thread(self._ingest_outputs, job["id"],
-                                        result.get("paths", []))
+                                        result.get("paths", []), result.get("meta"))
             except Exception as e:
                 await self._fail_or_retry(job, f"output ingest failed: {e}", "ingest_error")
                 return
@@ -259,7 +259,7 @@ class Scheduler:
         rp = Path(p).resolve()
         return any(rp == r or rp.is_relative_to(r) for r in self._managed_roots())
 
-    def _ingest_outputs(self, job_id: str, paths: list[str]):
+    def _ingest_outputs(self, job_id: str, paths: list[str], meta: dict | None = None):
         roots = self._managed_roots()
         for p in paths:
             rp = Path(p).resolve()
@@ -279,7 +279,11 @@ class Scheduler:
                 shutil.move(str(rp), dest)
             else:
                 rp.unlink()
-            asset = self.store.put_asset(sha256=sha, kind=kind, path=str(dest), size=size)
+            # worker-reported meta (duration_s etc.) rides on the asset, not
+            # the job: content-addressed, so every reuse of this exact bytes
+            # keeps the same honest duration. Only the first writer sets it.
+            asset = self.store.put_asset(sha256=sha, kind=kind, path=str(dest), size=size,
+                                         meta=meta)
             self.store.add_output(job_id, kind, asset["id"], str(dest), role="main")
 
     def _finish(self, job_id: str, status: str, **extra):

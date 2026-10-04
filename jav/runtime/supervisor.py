@@ -17,10 +17,12 @@ from pathlib import Path
 from .. import config
 from .base import BaseBackend, BackendCrash, _await_sync
 from .comfy import ComfyBackend
+from .cosyvoice import CosyVoiceBackend
 from .zit import ZitBackend
 
 BACKEND_CLASSES: dict[str, type[BaseBackend]] = {
     "zit_subprocess": ZitBackend,
+    "cosyvoice_subprocess": CosyVoiceBackend,
     "comfyui": ComfyBackend,
 }
 
@@ -238,10 +240,11 @@ class Supervisor:
             # Strict identity: the exact script the recorded profile spawns.
             profile = st.get("profile")
             p = self.profiles.get(profile) if profile else None
-            if p is not None and p.backend == "zit_subprocess" and p.script:
-                expected = str(p.script)
-            elif p is not None and p.backend == "comfyui":
+            if p is not None and p.backend == "comfyui":
                 expected = str(config.COMFYUI_DIR / "main.py")
+            elif p is not None and p.script:
+                # all script-spawned subprocess workers (zit/cosyvoice/...)
+                expected = str(p.script)
             else:
                 self.store.log_event(profile, None, "startup_sweep_skipped_unknown_profile",
                                      ok=False, detail=f"pid={pid}")

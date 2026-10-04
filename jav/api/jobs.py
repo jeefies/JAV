@@ -16,6 +16,12 @@ from ..providers import ProviderError
 
 router = APIRouter(prefix="/v1")
 
+FILE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+             ".webp": "image/webp", ".bmp": "image/bmp", ".gif": "image/gif",
+             ".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
+             ".mkv": "video/x-matroska", ".mp3": "audio/mpeg", ".wav": "audio/wav",
+             ".flac": "audio/flac", ".ogg": "audio/ogg"}
+
 
 def _public(ctx, job: dict, outs: list[dict] | None = None,
             qpos: int | None | bool = False) -> dict:
@@ -31,11 +37,17 @@ def _public(ctx, job: dict, outs: list[dict] | None = None,
         "finished_at": job["finished_at"], "error": job["error"],
         "error_type": job["error_type"], "retry_count": job["retry_count"],
         "queue_position": qpos,
-        "outputs": [{
-            "id": o["id"], "kind": o["kind"], "asset_id": o["asset_id"], "role": o["role"],
-            "url": f"/v1/jobs/{job['id']}/output?asset_id={o['id']}",
-        } for o in outs],
+        "outputs": [_public_output(job["id"], o) for o in outs],
     }
+
+
+def _public_output(job_id: str, o: dict) -> dict:
+    out = {"id": o["id"], "kind": o["kind"], "asset_id": o["asset_id"], "role": o["role"],
+           "url": f"/v1/jobs/{job_id}/output?asset_id={o['id']}"}
+    dur = (o.get("asset_meta") or {}).get("duration_s")
+    if dur is not None:
+        out["duration_s"] = dur
+    return out
 
 
 class _Prepared:
@@ -212,10 +224,12 @@ async def job_output_file(job_id: str, request: Request, asset_id: str | None = 
     if not outs:
         raise HTTPException(404, detail="output not found")
     o = outs[0]
-    if not Path(o["path"]).exists():
+    p = Path(o["path"])
+    if not p.exists():
         raise HTTPException(410, detail="output file missing (purged?)")
-    media = {"image": "image/png", "video": "video/mp4", "audio": "audio/mpeg"}.get(o["kind"])
-    return FileResponse(o["path"], media_type=media, filename=Path(o["path"]).name)
+    media = FILE_MIME.get(p.suffix.lower()) or \
+        {"image": "image/png", "video": "video/mp4", "audio": "audio/wav"}.get(o["kind"])
+    return FileResponse(str(p), media_type=media, filename=p.name)
 
 
 @router.get("/jobs/{job_id}/events")

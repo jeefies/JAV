@@ -26,10 +26,10 @@
 
 ## 概念
 
-- **provider**：`zit` | `ltx25` | `mh3`
+- **provider**：`zit` | `ltx25` | `mh3` | `cosyvoice`
 - **workflow**：provider 内的能力名（见 `/v1/capabilities`）
-- **runtime_profile**：真正占用 GPU 的资源档位（`zit` / `ltx25` / `mh3.fl2va` / `mh3.ref2va`），
-  互斥调度，同一时刻仅一个常驻
+- **runtime_profile**：真正占用 GPU 的资源档位（`zit` / `ltx25` / `mh3.fl2va` / `mh3.ref2va` /
+  `cosyvoice`），互斥调度，同一时刻仅一个常驻
 
 | provider.workflow | runtime_profile |
 |---|---|
@@ -37,6 +37,7 @@
 | ltx25.t2v / i2v / flf2v / a2v / union_control / motion_control / inpaint / outpaint / ic_lora / bbox_control | ltx25 |
 | mh3.t2v / i2v / fl2v | mh3.fl2va |
 | mh3.ref2v / fun_control / multiframe | mh3.ref2va |
+| cosyvoice.t2a | cosyvoice |
 
 已验证扩展语义：
 - `ltx25`：`generation.mode = "fast"`（默认，单段 distilled 8 步）| `"high"`
@@ -71,6 +72,18 @@
   （`[{image|video, time}]`，≤8；`video` 走 LoadVideo clip 锚定 = 官方 continuation 语义，
   `time` 秒 → `MiniMaxH3AddGuide` 按 `round(time*fps)` clamp 到帧）；
   ref2va base，链式把每张关键帧锚定到 latent 对应帧，默认 20 步
+- `cosyvoice`（CosyVoice3 配音，worker=独立 venv，见「系统」节）：
+  - `t2a` 输入：`text`（必填，逐字朗读，≤5000 字符）+ 音色二选一：
+    `voice_id`（`GET /v1/voices` 注册表）或 `reference_audio`+`reference_text`（内联试听，
+    spk 按 asset id 稳定注册于 worker 进程内）
+  - `instruction`：自然语言表演指令（情绪/语气/轻重音/方言；官方支持集见
+    `CosyVoice/cosyvoice/utils/common.py::instruct_list`）；非空 → `inference_instruct2`
+    且**逐句携带 prompt_wav**（zero_shot_spk_id 路径会丢弃 instruct 文本，勿"优化"复用注册捷径）
+  - `generation.speed` 0.5..2.0（默认 1.0）；`sample_rate` 默认 48000（模型 24k 重采样，
+    输出 WAV 单声道 PCM16）；`seed` 默认 **42**（确定性，同参数命中缓存）；
+    `inputs.text_frontend`（默认 true；wetext FST 缺失时官方自动降级）
+  - 输出 outputs[] 带 `duration_s`（生成结果实测时长，永不截断台词）
+  - 多音字：`text` 内联拼音标记（`[j][ǐ]` 官方 hotfix 语法）直接透传
 
 ## 任务
 
@@ -159,6 +172,11 @@
 ## 系统
 - `GET /v1/capabilities` — 每个 workflow 的 `available` 由
   权重在盘 × 模板实现 × 硬件 smoke 标志动态计算；`reason` 说明不可用原因
+- `GET /v1/voices` — cosyvoice 角色音色注册表（id/name/description/source，
+  不泄漏参考路径）
+- `POST /v1/voices` — 注册/替换音色（Bearer）：`{id, name?, prompt_asset(kind=audio
+  资产 id), prompt_text(逐字稿), description?}`；写 `config/voices.yaml`（原子替换），
+  即时生效无需重启。文件路径型条目直接编辑 voices.yaml 的 `path:`（须在 /mnt/data/AV 内）
 - `GET /v1/queue` — `{active_profile, state, streak, queued_by_profile,
   queued_total, admission_backoff}`
 - `GET /v1/runtime` — 当前 runtime 进程/RAM/swap/VRAM 指标 + 最近切换事件

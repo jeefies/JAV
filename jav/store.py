@@ -228,10 +228,14 @@ class Store:
         return {"total": total, "jobs": rows}
 
     def find_cache_hit(self, cache_key: str) -> dict | None:
+        # deterministic providers are zit (images) and cosyvoice (audio);
+        # video kinds deliberately never hit (expensive to reuse, cheap-ish
+        # to re-roll semantics differ)
         return self._one(
             """SELECT j.*, o.path AS output_path FROM jobs j
                JOIN outputs o ON o.job_id=j.id
-               WHERE j.cache_key=? AND j.status='completed' AND o.kind='image'
+               WHERE j.cache_key=? AND j.status='completed'
+                 AND o.kind IN ('image','audio')
                ORDER BY j.created_at DESC LIMIT 1""",
             (cache_key,),
         )
@@ -313,8 +317,21 @@ class Store:
         return {"id": oid, "job_id": job_id, "kind": kind, "asset_id": asset_id,
                 "path": path, "role": role}
 
+    @staticmethod
+    def _with_asset_meta(rows: list[dict]) -> list[dict]:
+        for r in rows:
+            meta = r.pop("asset_meta", None)
+            try:
+                r["asset_meta"] = json.loads(meta) if meta else {}
+            except Exception:
+                r["asset_meta"] = {}
+        return rows
+
     def get_outputs(self, job_id: str) -> list[dict]:
-        return self._rows("SELECT * FROM outputs WHERE job_id=? ORDER BY created_at", (job_id,))
+        return self._with_asset_meta(self._rows(
+            """SELECT o.*, a.meta AS asset_meta FROM outputs o
+               LEFT JOIN assets a ON a.id=o.asset_id
+               WHERE o.job_id=? ORDER BY o.created_at""", (job_id,)))
 
     def outputs_for(self, job_ids: list[str]) -> dict[str, list[dict]]:
         """Batch variant of get_outputs (avoids N+1 on list endpoints)."""
@@ -322,9 +339,12 @@ class Store:
             return {}
         out: dict[str, list[dict]] = {jid: [] for jid in job_ids}
         q = ",".join("?" * len(job_ids))
-        for r in self._rows(
-                f"SELECT * FROM outputs WHERE job_id IN ({q}) ORDER BY created_at",
-                tuple(job_ids)):
+        rows = self._with_asset_meta(self._rows(
+            f"""SELECT o.*, a.meta AS asset_meta FROM outputs o
+                LEFT JOIN assets a ON a.id=o.asset_id
+                WHERE o.job_id IN ({q}) ORDER BY o.created_at""",
+            tuple(job_ids)))
+        for r in rows:
             out.setdefault(r["job_id"], []).append(r)
         return out
 

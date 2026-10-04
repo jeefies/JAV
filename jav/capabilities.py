@@ -17,7 +17,7 @@ IMPLEMENTED = {"zit.t2i", "zit.i2i", "zit.inpaint",
                "ltx25.union_control", "ltx25.motion_control", "ltx25.inpaint",
                "ltx25.outpaint", "ltx25.ic_lora",
                "mh3.t2v", "mh3.i2v", "mh3.fl2v", "mh3.ref2v", "mh3.fun_control",
-               "mh3.multiframe"}
+               "mh3.multiframe", "cosyvoice.t2a"}
 
 # Workflows that passed a real-hardware smoke test (recorded, not inferred).
 FLAGS_FILE = Path(config.DATA_DIR) / "capability_flags.json"
@@ -103,6 +103,19 @@ def _weights_for(profile: str) -> tuple[bool, str]:
         missing = [n for n in sorted(need)
                    if not any((m / sub / n).exists() for sub in _MH3_MODEL_SUBDIRS)]
         return not missing, f"MiniMax H3 {kind} weights missing {missing}"
+    if profile == "cosyvoice":
+        m = config.COSYVOICE_WEIGHTS_DIR
+        r = config.COSYVOICE_REPO_DIR
+        need = ["cosyvoice3.yaml", "llm.pt", "flow.pt", "hift.pt",
+                "campplus.onnx", "speech_tokenizer_v3.onnx"]
+        missing = [n for n in need if not (m / n).exists()]
+        if not (m / "CosyVoice-BlankEN").is_dir():
+            missing.append("CosyVoice-BlankEN/")
+        if not (r / "cosyvoice").is_dir():
+            missing.append("repo:cosyvoice/")
+        if not (r / "third_party" / "Matcha-TTS").is_dir():
+            missing.append("repo:third_party/Matcha-TTS/")
+        return not missing, f"CosyVoice3 files missing {missing}"
     return False, "unknown profile"
 
 

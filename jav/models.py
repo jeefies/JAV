@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-Providers = Literal["zit", "mh3", "ltx25"]
+Providers = Literal["zit", "mh3", "ltx25", "cosyvoice"]
 
 
 def eff_seed(gen: dict) -> int:
@@ -36,6 +36,7 @@ PROVIDER_WORKFLOWS: dict[str, dict[str, str]] = {
               "bbox_control": "ltx25",
               "union_control": "ltx25", "motion_control": "ltx25",
               "inpaint": "ltx25", "outpaint": "ltx25", "ic_lora": "ltx25"},
+    "cosyvoice": {"t2a": "cosyvoice"},
 }
 
 

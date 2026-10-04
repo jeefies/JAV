@@ -148,7 +148,7 @@ class TestAPIFixes:
         raise AssertionError(f"job {jid} never reached {wanted}")
 
     def test_unload_guard_refuses_running_job(self, app_client):
-        from tests.conftest import FakeBackend
+        from conftest import FakeBackend
         FakeBackend.default_mode = "wait"
         j = app_client.post("/v1/jobs", json={"provider": "zit", "workflow": "t2i",
                                               "inputs": {"prompt": "x"}}).json()
@@ -194,7 +194,7 @@ class TestAPIFixes:
         from jav import server
         from jav.runtime import supervisor as sup_mod
         from jav.scheduler import EventBus, Scheduler
-        from tests.conftest import FakeBackend
+        from conftest import FakeBackend
         monkeypatch.setattr(config, "API_TOKEN", "sekret")
         sup_mod.register_backend("fake", FakeBackend)
         FakeBackend.instances.clear()

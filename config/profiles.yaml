@@ -1,0 +1,13 @@
+# Profile overrides (field-level merge with jav/config.py defaults; unknown keys error).
+# Loader expects a LIST of partial profile dicts keyed by "name" (config.load_profiles).
+# 2026-10-02: LTX-2.5 i2v high 15s/361f OOM'd at stage-2 sampler while UniChess
+# training co-occupies the same 16G card (see AGENTS 已知坑). ComfyUI dynamic VRAM
+# (default on) streams weights to RAM but its headroom does not account for
+# external-process growth; --vram-headroom keeps ~2GB completely free for
+# UniChess app+selfplay, counting other apps' VRAM via NVML pressure (default).
+- name: ltx25
+  extra_args: ["--vram-headroom", "2"]
+- name: mh3.fl2va
+  extra_args: ["--vram-headroom", "2"]
+- name: mh3.ref2va
+  extra_args: ["--vram-headroom", "2"]

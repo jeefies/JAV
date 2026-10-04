@@ -1,11 +1,11 @@
-"""System API: capabilities / runtime / queue / health."""
+"""System API: capabilities / runtime / queue / health / voices."""
 from __future__ import annotations
 
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Request
 
-from .. import capabilities, config
+from .. import capabilities, config, voices as voices_mod
 from ..runtime.supervisor import mem_available_mb, vram_pids
 
 router = APIRouter(prefix="/v1")
@@ -99,6 +99,39 @@ async def unload_runtime(request: Request):
 @router.get("/queue")
 async def get_queue(request: Request):
     return request.app.ctx.sched.snapshot()
+
+
+@router.get("/voices")
+async def list_voices(request: Request):
+    try:
+        registry = voices_mod.load_voices()
+    except voices_mod.VoiceError as e:
+        raise HTTPException(e.status, detail=str(e))
+    return {"voices": voices_mod.public_view(registry)}
+
+
+@router.post("/voices", status_code=201)
+async def register_voice(request: Request):
+    """注册/替换一个角色音色：prompt_asset 必须是已上传的 kind=audio 干声
+    资产，prompt_text 为其逐字稿（CosyVoice3 zero-shot 的两个输入）。"""
+    ctx = request.app.ctx
+    body = await request.json()
+    entry = {"id": str(body.get("id", "")).strip(),
+             "name": str(body.get("name", "")).strip(),
+             "asset": str(body.get("prompt_asset", "")).strip(),
+             "prompt_text": str(body.get("prompt_text", "")).strip(),
+             "description": str(body.get("description", "")).strip()}
+    asset = ctx.store.get_asset(entry["asset"]) if entry["asset"] else None
+    if asset is None:
+        raise HTTPException(400, detail=f"unknown prompt_asset: {entry['asset']!r}")
+    if asset["kind"] != "audio":
+        raise HTTPException(400, detail=f"prompt_asset must be kind=audio, got {asset['kind']}")
+    try:
+        v = voices_mod.upsert_voice({k: v for k, v in entry.items() if k != "name" or v})
+    except voices_mod.VoiceError as e:
+        raise HTTPException(e.status, detail=str(e))
+    return {"id": v["id"], "name": v["name"], "registered": True,
+            "source": "asset", "description": v["description"]}
 
 
 @router.get("/health")

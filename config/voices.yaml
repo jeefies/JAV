@@ -1,0 +1,7 @@
+# cosyvoice.t2a 角色音色注册表（实现说明见 jav/voices.py）
+# 每条: id 唯一; prompt_text 为参考干声的逐字稿; asset(资产 id) 与 path(盘内文件) 二选一。
+- id: demo-zh-f
+  name: 示例女声（CosyVoice 官方 zero-shot 素材）
+  prompt_text: 希望你以后能够做的比我还好呦。
+  path: /mnt/data/AV/CosyVoice/asset/zero_shot_prompt.wav
+  description: 约10s 普通话单人干声；仅作冒烟/试听占位，正式角色用 POST /v1/voices 注册授权素材

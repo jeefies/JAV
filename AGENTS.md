@@ -30,6 +30,8 @@
 ## 开发
 - 解释器：统一 conda env `comfyui`（服务、ZIT worker、ComfyUI backend 同一
   `/home/jeefy/miniconda3/envs/comfyui/bin/python3`；旧 image env 已删除）。
+  **例外：cosyvoice worker 用独立 venv `/mnt/data/AV/venvs/cosyvoice`**
+  （python3.12 + torch 2.7.1+cu128）——见已知坑「CosyVoice 依赖隔离」。
 - 测试：`python3 -m pytest tests -q`（FakeBackend 驱动，秒级，不占 GPU/内存）；
   GPU 级验收见 README「当前状态」与 `tools/comfy_smoke.py`。
 - 修改 profile 预算：`jav/config.py`（默认值）或 `config/profiles.yaml`（覆盖）。
@@ -74,6 +76,26 @@
 - GPU 子进程环境必须剥离 `JAV_API_TOKEN`（第三方 ComfyUI 节点可执行任意代码；
   ComfyUI 还额外剥 `JAV_CALLBACK_SECRET`）。ZIT worker 保留 callback 三件套但
   同样不见 token。新增 backend spawn 时照抄该 scrub。
+- **CosyVoice 依赖隔离（2026-10-04 t2a 上线）**：本机是 RTX 5070 Ti（**sm_120**），
+  上游 requirements 钉的 torch 2.3.1+cu121 最高只到 sm_90，装上只会 CUDA 报错——
+  venv 内必须 `torch==2.7.1+cu128`（torchaudio 同步）。conda 默认 channels 走
+  tuna 镜像已 403，建环境用 `uv venv --seed` + pip 走 `mirrors.aliyun.com`；
+  openai-whisper 需 `--no-build-isolation`（其 setup.py 要 pkg_resources，build
+  隔离环境的 setuptools≥81 已删除）。推理链真实需要：whisper/onnxruntime/
+  hyperpyyaml/wetext/**lightning**（matcha.utils）/**gdown+wget**（matcha utils）/
+  **x-transformers**（CV3 flow DiT）/**pyarrow+pyworld**（cosyvoice3.yaml 引用的
+  dataset.processor）。缺任何一个表现为 AutoModel 加载期 pydoc locate ImportError。
+- **instruct2 与注册 spk 互斥陷阱**：`frontend_instruct2` 传了 `zero_shot_spk_id`
+  会直接加载 spk2info 并**丢弃 instruct 文本**（wants.md 的"逐句表演指令"会静默
+  失效）。cosyvoice_worker 的实现是正确的：有 instruction → 逐句传 prompt_wav 的
+  instruct2（无 spk 捷径）；无 instruction → add_zero_shot_spk 注册后的快速路径。
+  勿"优化"成统一走 spk 注册。spk2info.pt 是只读快照（模型目录不回写），
+  音色真相在 `config/voices.yaml`，worker 进程启动后按任务懒注册。
+- cosyvoice 实测：加载 17s，VRAM 峰值 3.9G / RSS 7.3G（budget 6144/12288 有余量，
+  仍属小档）；RTF 0.2–0.7。t2a 默认 seed=42（确定性 → §7 缓存复用）；输出 24k
+  模型采样率 → 重采样到 `generation.sample_rate`（默认 48k）mono PCM16。
+  wetext FST 自动缓存于 ~/.cache/modelscope/hub/pengzhendong（只含 .fst，不触发
+  audit_weights 红线；缺失时官方降级为无前端，CV3 自带文本归一化，无碍）。
 - 调度器 `_finish` 是取消竞态的最后闸口（completed + cancel_requested → 落定
   cancelled），勿在别处绕过它直接 set_status("completed")。取消路径的
   `Path.unlink` 与 `_ingest_outputs` 共用 `_managed_roots`/`_contained` 白名单，

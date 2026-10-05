@@ -229,7 +229,7 @@ class Store:
         return {"total": total, "jobs": rows}
 
     def get_job_by_client_ref(self, ref: str) -> dict | None:
-        """提交响应丢失后的按请求编号查询（wants.md §6）。"""
+        """提交响应丢失后，按调用方请求编号回查任务（幂等恢复）。"""
         row = self._one(
             "SELECT id FROM jobs WHERE client_ref=? ORDER BY created_at DESC, id LIMIT 1",
             (ref,))

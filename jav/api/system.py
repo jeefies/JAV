@@ -156,7 +156,7 @@ def _reference_probe(ctx, v: dict) -> dict | None:
 
 @router.get("/voices/{voice_id}")
 async def voice_detail(voice_id: str, request: Request):
-    """详情与版本（wants.md §5 GET /api/voices/{id}）：不含路径/逐字稿。"""
+    """音色详情与版本历史：不含路径/逐字稿。"""
     ctx = request.app.ctx
     try:
         registry = voices_mod.load_voices()
@@ -171,7 +171,7 @@ async def voice_detail(voice_id: str, request: Request):
 
 @router.post("/voices", status_code=201)
 async def register_voice(request: Request):
-    """注册一个角色音色（wants.md §2：重复注册默认 409，不默默覆盖；
+    """注册一个角色音色（重复注册默认 409，不默默覆盖；
     显式 replace=true 替换并把旧版记入 history，version+1）。
 
     prompt_asset 必须是已上传的 kind=audio 干声资产，prompt_text 为其逐字稿

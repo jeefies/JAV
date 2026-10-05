@@ -5,3 +5,5 @@ logs/
 tools/ltx_nodes_info*.json
 tests/.pytest_cache/
 .pytest_cache/
+# 运行数据：项目音色注册表（服务仓库不承载任何项目角色数据）
+config/voices.yaml

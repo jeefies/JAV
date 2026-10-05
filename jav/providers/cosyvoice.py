@@ -1,6 +1,6 @@
 """CosyVoice3 provider: t2a (配音对白) on the CosyVoice worker subprocess.
 
-台词与表演指令分离传入（wants.md §3）：text 永远逐字朗读；instruction 只进
+台词与表演指令分离传入：text 永远逐字朗读；instruction 只进
 instruct 通道（"You are a helpful assistant. X<|endofprompt|>"）。多音字
 hotfix 由 text 内联拼音标记（如 [j][ǐ]）直接透传，官方能力。
 """
@@ -14,7 +14,7 @@ DEFAULTS = {
     "seed": 42,           # 确定性默认：同参数重放命中缓存（§7 复用）
     "sample_rate": 48000,
 }
-# wants.md §3：不支持的参数必须明确报错，不能接受后忽略——输入/生成字段
+# 不支持的参数必须明确报错，不能接受后忽略——输入/生成字段
 # 都走白名单校验，未知 key 直接 400。
 KNOWN_INPUTS = {"text", "voice_id", "instruction", "reference_audio",
                 "reference_text", "text_frontend", "duration_limit_s"}
@@ -34,7 +34,7 @@ def wrap_instruct(instruction: str) -> str:
 def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
     if workflow != "t2a":
         raise ValueError(f"cosyvoice: unknown workflow {workflow}")
-    # wants.md §3: reject, never silently drop, unrecognized knobs.
+    # reject, never silently drop, unrecognized knobs.
     unknown_in = set(inputs) - KNOWN_INPUTS
     if unknown_in:
         raise ValueError(f"cosyvoice.t2a: unsupported input(s) {sorted(unknown_in)}; "

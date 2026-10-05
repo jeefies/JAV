@@ -10,7 +10,7 @@ from jav import voices
 from jav.providers import cosyvoice as cv
 
 T2A = {"provider": "cosyvoice", "workflow": "t2a",
-       "inputs": {"text": "那之前公布的两年呢？", "voice_id": "qiyuan",
+       "inputs": {"text": "明天上午九点开会。", "voice_id": "actor_a",
                   "instruction": "听完后克制地追问"},
        "generation": {"speed": 1.0, "seed": 42}}
 
@@ -30,10 +30,10 @@ def _seed_flags():
 @pytest.fixture
 def registry():
     _write_voices([
-        {"id": "qiyuan", "name": "齐远", "prompt_text": "参考音频逐字稿。",
+        {"id": "actor_a", "name": "角色甲", "prompt_text": "参考音频逐字稿。",
          "asset": "asset_qy1234"},
-        {"id": "teacher", "name": "叶老师", "prompt_text": "另一段逐字稿。",
-         "path": str(config.DATA_DIR / "refs/teacher.wav")},
+        {"id": "actor_b", "name": "角色乙", "prompt_text": "另一段逐字稿。",
+         "path": str(config.DATA_DIR / "refs/actor_b.wav")},
     ])
     yield
     (config.BASE_DIR / "config" / "voices.yaml").unlink(missing_ok=True)
@@ -56,12 +56,12 @@ def test_normalize_requires_voice(registry):
     with pytest.raises(ValueError, match="reference_text"):
         cv.normalize("t2a", {"text": "hi", "reference_audio": "asset_x"}, {})
     with pytest.raises(ValueError, match="text"):
-        cv.normalize("t2a", {"voice_id": "qiyuan"}, {})
+        cv.normalize("t2a", {"voice_id": "actor_a"}, {})
 
 
 def test_normalize_registry_and_inline(registry):
     p = cv.normalize("t2a", T2A["inputs"], T2A["generation"])
-    assert p["voice_id"] == "qiyuan"
+    assert p["voice_id"] == "actor_a"
     assert p["assets"] == {"reference_audio": "asset_qy1234"}
     assert p["instruct_text"].endswith("<|endofprompt|>")
     assert p["generation"]["sample_rate"] == 48000
@@ -73,9 +73,9 @@ def test_normalize_registry_and_inline(registry):
 
     # 语速/采样率校验
     with pytest.raises(ValueError, match="speed"):
-        cv.normalize("t2a", {"text": "x", "voice_id": "qiyuan"}, {"speed": 3})
+        cv.normalize("t2a", {"text": "x", "voice_id": "actor_a"}, {"speed": 3})
     with pytest.raises(ValueError, match="sample_rate"):
-        cv.normalize("t2a", {"text": "x", "voice_id": "qiyuan"}, {"sample_rate": 8000})
+        cv.normalize("t2a", {"text": "x", "voice_id": "actor_a"}, {"sample_rate": 8000})
 
 
 def test_cache_key_determinism(registry):
@@ -87,7 +87,7 @@ def test_cache_key_determinism(registry):
     p2["instruct_text"] = None
     assert cv.cache_key(p2) != k1
     p2["instruct_text"] = p1["instruct_text"]
-    p2["voice_id"] = "teacher"
+    p2["voice_id"] = "actor_b"
     assert cv.cache_key(p2) != k1
     # 随机 seed 不缓存（同 zit 姿态）
     p3 = cv.normalize("t2a", T2A["inputs"], {"seed": -1})
@@ -103,10 +103,10 @@ def test_compile_paths(registry):
     assert task["prompt_wav"] == "/tmp/kilo/qy.wav"
     assert task["instruct_text"].startswith("You are a helpful assistant.")
 
-    p2 = cv.normalize("t2a", {"text": "早", "voice_id": "teacher"}, {})
+    p2 = cv.normalize("t2a", {"text": "早", "voice_id": "actor_b"}, {})
     p2["job_id"] = "job_y"
     task2 = cv.compile(p2, {}, "/tmp/kilo/out", config.BASE_DIR)
-    assert task2["prompt_wav"] == str(config.DATA_DIR / "refs/teacher.wav")
+    assert task2["prompt_wav"] == str(config.DATA_DIR / "refs/actor_b.wav")
     assert task2["instruct_text"] is None
 
 
@@ -129,15 +129,15 @@ def test_voice_parse_errors():
 
 
 def test_upsert_voice(registry):
-    v = voices.upsert_voice({"id": "jiwei", "name": "纪伟", "asset": "asset_jw",
-                             "prompt_text": "纪伟参考逐字稿。", "description": "主角"})
-    assert v["id"] == "jiwei" and v["asset"] == "asset_jw"
+    v = voices.upsert_voice({"id": "narrator", "name": "旁白", "asset": "asset_jw",
+                             "prompt_text": "旁白参考逐字稿。", "description": "旁白"})
+    assert v["id"] == "narrator" and v["asset"] == "asset_jw"
     # 替换同名条目，不重复追加
-    voices.upsert_voice({"id": "jiwei", "name": "纪伟旁白", "asset": "asset_jw",
+    voices.upsert_voice({"id": "narrator", "name": "旁白旁白", "asset": "asset_jw",
                          "prompt_text": "新逐字稿。"})
     all_v = voices.load_voices()
-    assert all_v["jiwei"]["prompt_text"] == "新逐字稿。"
-    assert len([k for k in all_v if k == "jiwei"]) == 1
+    assert all_v["narrator"]["prompt_text"] == "新逐字稿。"
+    assert len([k for k in all_v if k == "narrator"]) == 1
 
 
 # ---------------- app/API ----------------
@@ -151,7 +151,7 @@ def test_capability_gated_until_validated(app_client):
 
 def test_t2a_lifecycle_duration_and_download(app_client, registry):
     _seed_flags()
-    _write_voices([{"id": "qiyuan", "prompt_text": "逐字稿",
+    _write_voices([{"id": "actor_a", "prompt_text": "逐字稿",
                     "path": str(config.DATA_DIR / "refs/qy.wav")}])
     r = app_client.post("/v1/jobs", json=T2A)
     assert r.status_code == 201, r.text
@@ -176,7 +176,7 @@ def test_t2a_lifecycle_duration_and_download(app_client, registry):
 
 def test_t2a_cache_hit_reuse(app_client, registry):
     _seed_flags()
-    _write_voices([{"id": "qiyuan", "prompt_text": "逐字稿",
+    _write_voices([{"id": "actor_a", "prompt_text": "逐字稿",
                     "path": str(config.DATA_DIR / "refs/qy.wav")}])
     r1 = app_client.post("/v1/jobs", json=T2A)
     j1 = r1.json()["id"]
@@ -197,16 +197,16 @@ def test_t2a_cache_hit_reuse(app_client, registry):
 
 def test_voices_api(app_client, registry):
     a = app_client.post("/v1/assets?kind=audio", content=b"RIFFfake",
-                        headers={"x-filename": "jiwei_ref.wav"})
+                        headers={"x-filename": "narrator_ref.wav"})
     assert a.status_code == 201, a.text
     aid = a.json()["id"]
-    r = app_client.post("/v1/voices", json={"id": "jiwei", "name": "纪伟",
+    r = app_client.post("/v1/voices", json={"id": "narrator", "name": "旁白",
                                             "prompt_asset": aid,
-                                            "prompt_text": "纪伟逐字稿。"})
+                                            "prompt_text": "旁白逐字稿。"})
     assert r.status_code == 201, r.text
     lst = app_client.get("/v1/voices").json()["voices"]
-    assert {"id": "jiwei", "name": "纪伟", "source": "asset",
-            "description": ""} in lst or any(v["id"] == "jiwei" for v in lst)
+    assert {"id": "narrator", "name": "旁白", "source": "asset",
+            "description": ""} in lst or any(v["id"] == "narrator" for v in lst)
     # 非音频资产拒绝
     img = app_client.post("/v1/assets?kind=image", content=b"PNG",
                           headers={"x-filename": "x.png"}).json()["id"]
@@ -217,7 +217,7 @@ def test_voices_api(app_client, registry):
     _seed_flags()
     job = app_client.post("/v1/jobs", json={
         "provider": "cosyvoice", "workflow": "t2a",
-        "inputs": {"text": "旁白测试", "voice_id": "jiwei"},
+        "inputs": {"text": "旁白测试", "voice_id": "narrator"},
         "generation": {"seed": 7}})
     assert job.status_code == 201, job.text
     (config.BASE_DIR / "config" / "voices.yaml").unlink(missing_ok=True)
@@ -234,65 +234,65 @@ def test_voice_sample_endpoint(app_client, registry):
     assert r.headers["content-type"].startswith("audio/wav")
     assert r.content == b"RIFFaud"
     # path 型：文件缺失 410，存在则原样返回
-    assert app_client.get("/v1/voices/teacher/sample").status_code == 410
-    p = config.DATA_DIR / "refs/teacher.wav"
+    assert app_client.get("/v1/voices/actor_b/sample").status_code == 410
+    p = config.DATA_DIR / "refs/actor_b.wav"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(b"wavdata")
-    r3 = app_client.get("/v1/voices/teacher/sample")
+    r3 = app_client.get("/v1/voices/actor_b/sample")
     assert r3.status_code == 200 and r3.content == b"wavdata"
     assert app_client.get("/v1/voices/ghost/sample").status_code == 404
     p.unlink(missing_ok=True)
 
 
-# ---------------- wants.md v2: strict params ----------------
+# ---------------- strict params ----------------
 def test_strict_param_rejection(registry):
     # 未知 input / generation key 明确报错，不能接受后忽略（§3）
     with pytest.raises(ValueError, match="unsupported input"):
-        cv.normalize("t2a", {"text": "x", "voice_id": "qiyuan", "emotion": "sad"}, {})
+        cv.normalize("t2a", {"text": "x", "voice_id": "actor_a", "emotion": "sad"}, {})
     with pytest.raises(ValueError, match="unsupported generation"):
-        cv.normalize("t2a", {"text": "x", "voice_id": "qiyuan"}, {"temp": 0.7})
+        cv.normalize("t2a", {"text": "x", "voice_id": "actor_a"}, {"temp": 0.7})
     with pytest.raises(ValueError, match="instruction too long"):
-        cv.normalize("t2a", {"text": "x", "voice_id": "qiyuan",
+        cv.normalize("t2a", {"text": "x", "voice_id": "actor_a",
                              "instruction": "长" * 501}, {})
     with pytest.raises(ValueError, match="duration_limit_s"):
-        cv.normalize("t2a", {"text": "x", "voice_id": "qiyuan", "duration_limit_s": 0}, {})
-    p = cv.normalize("t2a", {"text": "x", "voice_id": "qiyuan", "duration_limit_s": 4.0}, {})
+        cv.normalize("t2a", {"text": "x", "voice_id": "actor_a", "duration_limit_s": 0}, {})
+    p = cv.normalize("t2a", {"text": "x", "voice_id": "actor_a", "duration_limit_s": 4.0}, {})
     assert p["duration_limit_s"] == 4.0 and p["instruction"] == ""
 
 
-# ---------------- voices registry v2: no silent overwrite ----------------
+# ---------------- voices registry: no silent overwrite ----------------
 def test_register_409_replace_history(registry):
-    v, created = voices.register_voice({"id": "jiwei", "asset": "a1",
-                                        "prompt_text": "第一版逐字稿。", "name": "纪伟"})
+    v, created = voices.register_voice({"id": "narrator", "asset": "a1",
+                                        "prompt_text": "第一版逐字稿。", "name": "旁白"})
     assert created and v["version"] == 1
     # 重复注册默认拒绝——不默默覆盖（§2）
     with pytest.raises(voices.VoiceError) as ei:
-        voices.register_voice({"id": "jiwei", "asset": "a2", "prompt_text": "换人"})
+        voices.register_voice({"id": "narrator", "asset": "a2", "prompt_text": "换人"})
     assert ei.value.status == 409 and "replace=true" in str(ei.value)
-    assert voices.get_voice("jiwei")["asset"] == "a1"     # 未被动过
+    assert voices.get_voice("narrator")["asset"] == "a1"     # 未被动过
     # 显式 replace：版本 +1，旧内容进 history
-    v2, created2 = voices.register_voice({"id": "jiwei", "asset": "a2",
-                                          "prompt_text": "新逐字稿", "name": "纪伟B"},
+    v2, created2 = voices.register_voice({"id": "narrator", "asset": "a2",
+                                          "prompt_text": "新逐字稿", "name": "旁白B"},
                                          replace=True, note="候选B胜出")
     assert not created2 and v2["version"] == 2
     assert v2["asset"] == "a2" and v2["revisions"] if "revisions" in v2 else True
     hist = v2["history"]
     assert hist and hist[-1]["asset"] == "a1" and hist[-1]["note"] == "候选B胜出"
-    got = voices.delete_voice("jiwei")
+    got = voices.delete_voice("narrator")
     assert got["asset"] == "a2"
     with pytest.raises(voices.VoiceError) as ei:
-        voices.delete_voice("jiwei")
+        voices.delete_voice("narrator")
     assert ei.value.status == 404
 
 
 def test_voice_metadata_fields(registry):
     v, _ = voices.register_voice({
         "id": "comm-m1", "asset": "a9", "prompt_text": "逐字稿",
-        "kind": "community", "role": "qiyuan", "tags": ["male", "bright"],
+        "kind": "community", "role": "actor_a", "tags": ["male", "bright"],
         "license": "CC-BY-4.0", "provenance": "https://example.org/voice-pack",
         "model": "Fun-CosyVoice3-0.5B"})
     pv = voices.public_view({"comm-m1": v})[0]
-    assert pv["kind"] == "community" and pv["role"] == "qiyuan"
+    assert pv["kind"] == "community" and pv["role"] == "actor_a"
     assert pv["license"] == "CC-BY-4.0" and pv["version"] == 1
     dv = voices.detail_view(v)
     assert dv["provenance"].startswith("https://") and dv["transcript_chars"] > 0
@@ -302,7 +302,7 @@ def test_voice_metadata_fields(registry):
                                "kind": "magic"})
 
 
-# ---------------- API v2 ----------------
+# ---------------- API ----------------
 def _mk_asset(app_client):
     a = app_client.post("/v1/assets?kind=audio", content=b"RIFFaud",
                         headers={"x-filename": "ref.wav"})
@@ -349,22 +349,22 @@ def test_voices_api_v2(app_client, registry):
 
 def test_strict_params_api(app_client, registry):
     _seed_flags()
-    _write_voices([{"id": "qiyuan", "prompt_text": "稿",
+    _write_voices([{"id": "actor_a", "prompt_text": "稿",
                     "path": str(config.DATA_DIR / "refs/qy.wav")}])
     r = app_client.post("/v1/jobs", json={
         "provider": "cosyvoice", "workflow": "t2a",
-        "inputs": {"text": "x", "voice_id": "qiyuan", "pitch": 3}})
+        "inputs": {"text": "x", "voice_id": "actor_a", "pitch": 3}})
     assert r.status_code == 400 and "unsupported input" in r.text
     r2 = app_client.post("/v1/jobs", json={
         "provider": "cosyvoice", "workflow": "t2a",
-        "inputs": {"text": "x", "voice_id": "qiyuan"},
+        "inputs": {"text": "x", "voice_id": "actor_a"},
         "generation": {"temp": 1}})
     assert r2.status_code == 400 and "unsupported generation" in r2.text
 
 
 def test_idempotent_submit_and_replay(app_client, registry):
     _seed_flags()
-    _write_voices([{"id": "qiyuan", "prompt_text": "稿",
+    _write_voices([{"id": "actor_a", "prompt_text": "稿",
                     "path": str(config.DATA_DIR / "refs/qy.wav")}])
     spec = {**T2A, "client_ref": "ep01-line-07"}
     r1 = app_client.post("/v1/jobs", json=spec)
@@ -378,8 +378,8 @@ def test_idempotent_submit_and_replay(app_client, registry):
     # 批量：同 batch client_ref 重放
     batch = {"shared": {"provider": "cosyvoice", "workflow": "t2a"},
              "client_ref": "ep01-all",
-             "jobs": [{"inputs": {"text": "甲", "voice_id": "qiyuan"}},
-                      {"inputs": {"text": "乙", "voice_id": "qiyuan"},
+             "jobs": [{"inputs": {"text": "甲", "voice_id": "actor_a"}},
+                      {"inputs": {"text": "乙", "voice_id": "actor_a"},
                        "client_ref": "ep01-b"}]}
     b1 = app_client.post("/v1/jobs/batch", json=batch)
     assert b1.status_code == 201, b1.text
@@ -391,7 +391,7 @@ def test_idempotent_submit_and_replay(app_client, registry):
 
 def test_audio_receipt_fields(app_client, registry):
     _seed_flags()
-    _write_voices([{"id": "qiyuan", "prompt_text": "稿",
+    _write_voices([{"id": "actor_a", "prompt_text": "稿",
                     "path": str(config.DATA_DIR / "refs/qy.wav")}])
     r = app_client.post("/v1/jobs", json=T2A)
     jid = r.json()["id"]
@@ -404,7 +404,7 @@ def test_audio_receipt_fields(app_client, registry):
     o = body["outputs"][0]
     assert len(o["sha256"]) == 64 and o["size_bytes"] > 0
     assert o["meta"]["mode"] in ("zero_shot", "instruct2")
-    assert o["meta"]["voice_id"] == "qiyuan"
+    assert o["meta"]["voice_id"] == "actor_a"
     assert "duration_s" in o["meta"]
 
 

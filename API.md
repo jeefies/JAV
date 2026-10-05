@@ -83,7 +83,7 @@
     输出 WAV 单声道 PCM16）；`seed` 默认 **42**（确定性，同参数命中缓存）；
     `inputs.text_frontend`（默认 true；wetext FST 缺失时官方自动降级）；
     `inputs.duration_limit_s`（时段上限：超限仅 meta.overflow=true 报告，永不截断/加速）
-  - **参数白名单**：inputs/generation 未知键直接 400（wants.md §3"不接受后忽略"）；
+  - **参数白名单**：inputs/generation 未知键直接 400（不接受后忽略）；
     instruction ≤500 字符
   - 输出 outputs[] 带 `duration_s` + `sha256` + `size_bytes` + `meta`（回执：实际
     `mode` zero_shot/instruct2、`instruction` 原文、`seed_used`、`speed`、`text_frontend`、
@@ -106,7 +106,7 @@
 }
 ```
 - 201 → `{id, status:"queued", runtime_profile, queue_position, ...}`
-- **client_ref 幂等（wants.md §6）**：同 ref 重复提交 → 200 返回既有任务
+- **client_ref 幂等**：同 ref 重复提交 → 200 返回既有任务
   `{..., "idempotent_replay": true}`，不重复入队/计费；响应丢失后可
   `GET /v1/jobs?client_ref=…` 复查
 - 415：workflow 不可用（`{"detail":"... unavailable: <reason>"}`）
@@ -190,7 +190,7 @@
 - `POST /v1/voices` — 注册（Bearer）：`{id, name?, prompt_asset(kind=audio 资产 id),
   prompt_text(逐字稿), description?, kind?, role?, tags?, license?, provenance?, model?,
   replace?, note?}`；**重复 id 默认 409**，`replace:true` 才覆盖且旧版进 history、
-  version+1（wants.md §2 不默默覆盖）；`model` 与本部署不符 422；写 `config/voices.yaml`
+  version+1（不默默覆盖）；`model` 与本部署不符 422；写 `config/voices.yaml`
   （原子替换），即时生效。文件路径型条目直接编辑 voices.yaml 的 `path:`（限 /mnt/data/AV）
 - `DELETE /v1/voices/{id}` — 删除注册（产物/资产不动）；不存在 404
 - `GET /v1/capabilities` 的 cosyvoice 组附 `model` 块（名称/权重 sha 指纹/code_revision/

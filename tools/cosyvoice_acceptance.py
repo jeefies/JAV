@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""《公示期》配音验收工具（wants.md §8）：技术验收自动 + 听感验收清单。
+"""配音验收工具：技术验收自动 + 听感验收清单。
 
-对每个音色、每句剧本台词跑「默认合成 / 带表演指令」A/B 对照，下载产物并
-自动校验技术项（mono PCM16、采样率、时长、非静音 RMS、削波、sha256 回执、
-实际推理模式），生成 markdown 报告供人工听感检查。
+对每个音色、每句台词跑「默认合成 / 带表演指令」A/B 对照，下载产物并自动校验
+技术项（mono PCM16、采样率、时长、非静音 RMS、削波、sha256 回执、实际推理模式），
+生成 markdown 报告供人工听感检查。台词是项目数据：通过 --script 传入，本工具
+不内置任何项目内容。
 
 用法（JAV 空闲时运行——单 runtime 互斥）:
-  python3 tools/cosyvoice_acceptance.py [--voices demo-zh-f,demo-zh-m]
-  可选: --extra 自定义 JSON {voice_id: [台词...]}
+  python3 tools/cosyvoice_acceptance.py --voices v1,v2 --script lines.json
+  lines.json: ["第一句台词", "第二句台词", ...]（省略则用内置通用样例句）
 """
 import argparse
 import json
 import os
+import pathlib
 import time
 from datetime import datetime
 from pathlib import Path
@@ -21,12 +23,12 @@ import requests
 BASE = os.getenv("JAV_BASE_TOKEN_URL", "http://127.0.0.1:8765")
 TERMINAL = ("completed", "failed", "cancelled")
 
-# wants.md §8 指定验收台词
+# 通用样例台词（覆盖短句/疑问/陈述；项目台词用 --script 传入）
 SCRIPT_LINES = [
-    "这场报了三个人，记录得对一下。",
-    "饭先吃。有人问公示什么时候完。",
-    "那之前公布的两年呢？",
-    "但不会公开来说。学院老师会做他的工作。",
+    "明天上午九点，老地方见。",
+    "这件事我知道了，不用再重复。",
+    "真的吗？那后来呢？",
+    "不是我的意思，是大家的意思。",
 ]
 # A/B 对照用的表演指令（与默认合成同一 seed，唯一变量是 instruction）
 INSTRUCTION = "像日常对话一样自然地说，语气克制、略带疲惫，句尾轻收"
@@ -74,7 +76,7 @@ def local_metrics(wav: bytes) -> dict:
 
 
 def tech_checks(d: dict, wav: bytes, expect_mode: str) -> list[str]:
-    """§8「有音频、非静音、时长正常」技术验收 + §7 可剪辑干声项。"""
+    """技术验收：有音频、非静音、时长正常、可剪辑干声项。"""
     problems = []
     o = d["outputs"][0]
     meta = dict(o.get("meta") or {})
@@ -113,10 +115,14 @@ def tech_checks(d: dict, wav: bytes, expect_mode: str) -> list[str]:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--voices", default="demo-zh-f,demo-zh-m")
+    ap.add_argument("--script", help="台词 JSON 数组文件（项目内容，不入库）")
     ap.add_argument("--seed", type=int, default=42,
                     help="42=可复用缓存；验收新代码时换 seed 强制全量生成")
     ap.add_argument("--out", default="data/reports")
     args = ap.parse_args()
+    global SCRIPT_LINES
+    if args.script:
+        SCRIPT_LINES = json.loads(pathlib.Path(args.script).read_text())
     H = {"Authorization": f"Bearer {token()}"}
     voices = [v.strip() for v in args.voices.split(",") if v.strip()]
     run = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -130,7 +136,7 @@ def main():
                 ref = f"acc-{run}-{voice}-{i}-{'ab' if instructed else 'aa'}"
                 batch_jobs.append((voice, i, line, instructed, ref,
                                    spec(voice, line, instructed, ref, args.seed)))
-    # 一次批量提交：一条失败不影响其余（§6）
+    # 一次批量提交：一条失败不影响其余
     b = requests.post(f"{BASE}/v1/jobs/batch", headers=H, timeout=30,
                       json={"jobs": [j[5] for j in batch_jobs],
                             "client_ref": f"acc-batch-{run}"})
@@ -150,7 +156,7 @@ def main():
 
     md = [f"# cosyvoice.t2a 验收报告 {run}", "",
           f"- voices: {', '.join(voices)}  lines: {len(SCRIPT_LINES)}  "
-          f"A/B: 默认 vs 指令（seed=42 speed=1.0 48kHz）", "",
+          f"A/B: 默认 vs 指令（seed={args.seed} speed=1.0 48kHz）", "",
           "| voice | line | mode | dur | rms dBFS | peak | clip | tech |",
           "|---|---|---|---|---|---|---|---|"]
     fails = 0
@@ -172,7 +178,7 @@ def main():
                   f"| {m.get('rms_dbfs')} | {m.get('peak_dbfs')} "
                   f"| {m.get('clipped_samples')} | {'PASS' if not problems else '**'+'; '.join(problems)+'**'} |")
         fails += bool(problems)
-    md += ["", "## 人工听感检查清单（技术验收 ≠ 听感验收，§8）",
+    md += ["", "## 人工听感检查清单（技术验收 ≠ 听感验收）",
            "- [ ] 各角色跨句跨场景音色身份稳定（同 voice_id 全部条目像同一个人）",
            "- [ ] 同 seed 默认/指令 A/B：声线不变，仅表演（节奏/轻重/语气）变化",
            "- [ ] 短句无吞字、句尾完整、无突然截断；数字/专名读法正确",

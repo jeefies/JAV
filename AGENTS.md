@@ -86,14 +86,14 @@
   **x-transformers**（CV3 flow DiT）/**pyarrow+pyworld**（cosyvoice3.yaml 引用的
   dataset.processor）。缺任何一个表现为 AutoModel 加载期 pydoc locate ImportError。
 - **instruct2 与注册 spk 互斥陷阱**：`frontend_instruct2` 传了 `zero_shot_spk_id`
-  会直接加载 spk2info 并**丢弃 instruct 文本**（wants.md 的"逐句表演指令"会静默
+  会直接加载 spk2info 并**丢弃 instruct 文本**（逐句表演指令会静默
   失效）。cosyvoice_worker 的实现是正确的：有 instruction → 逐句传 prompt_wav 的
   instruct2（无 spk 捷径）；无 instruction → add_zero_shot_spk 注册后的快速路径。
   勿"优化"成统一走 spk 注册。spk2info.pt 是只读快照（模型目录不回写），
   音色真相在 `config/voices.yaml`，worker 进程启动后按任务懒注册。
   VoiceCache 的缓存键含参考文件 (mtime,size)+逐字稿：`POST /v1/voices replace=true`
   换素材后 worker 不死也会自动重提特征，勿改回"按 voice_id 一次性注册"（陈旧 embedding）。
-- **音色管理语义（wants.md v2，2026-10-05）**：重复注册默认 **409**，显式 `replace:true`
+- **音色管理语义（2026-10-05）**：重复注册默认 **409**，显式 `replace:true`
   才覆盖（旧版进 history，version+1，保留 20 版）；`kind/license/provenance/role/tags`
   为来源/许可元数据；`model` 不符部署名 422。试听端点正名 `/preview`（`/sample` 是
   兼容别名）。t2a inputs/generation **白名单**：未知键 400（"不支持的参数明确报错，

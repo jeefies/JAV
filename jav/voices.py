@@ -5,7 +5,7 @@ voice (asset id or a file path under /mnt/data/AV) + its exact transcript,
 which CosyVoice3 turns into a zero-shot speaker embedding. 与 profiles.yaml
 一样：字段级、mtime 缓存、未知 key 直接报错。
 
-wants.md 管理要求：
+管理要求：
   - 每条音色带 kind(local/community/cloud)、role(角色映射)、tags(声线描述)、
     license(使用许可)、provenance(来源)、model(兼容模型) 元数据（全部可选，
     旧条目照常解析）。
@@ -206,7 +206,7 @@ def _write_raw(entries: list) -> None:
 def register_voice(entry: dict, replace: bool = False, note: str = "") -> tuple[dict, bool]:
     """Register a voice. Returns (entry, was_replaced).
 
-    wants.md §2: 重复注册有明确处理规则——默认 409，显式 replace=true 才
+    重复注册有明确处理规则——默认 409，显式 replace=true 才
     覆盖，且旧版本进 history（版本自动 +1）。"""
     with _LOCK:
         raw = _read_raw()

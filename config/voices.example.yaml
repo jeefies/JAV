@@ -1,0 +1,15 @@
+# cosyvoice.t2a 角色音色注册表示例（实现说明见 jav/voices.py）
+# 运行时真相在 config/voices.yaml（git 不跟踪）；调用方通过 POST /v1/voices 注册，
+# 或运维直接维护该文件。重复注册默认 409，显式 replace=true 才覆盖（旧版进 history）。
+# 每条: id 唯一; prompt_text 为参考干声的逐字稿; asset(资产 id) 与 path(盘内文件) 二选一。
+- id: demo-zh-f
+  name: 示例女声（CosyVoice 官方 zero-shot 素材）
+  prompt_text: 希望你以后能够做的比我还好呦。
+  path: /mnt/data/AV/CosyVoice/asset/zero_shot_prompt.wav
+  description: 约3.5s 普通话单人干声；仅作冒烟/试听占位
+  kind: community
+  tags: [中文, 女声]
+  license: Apache-2.0（CosyVoice 仓库官方示例素材）
+  provenance: CosyVoice 官方仓库 asset/zero_shot_prompt.wav
+  model: Fun-CosyVoice3-0.5B
+  version: 1

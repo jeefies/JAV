@@ -97,7 +97,7 @@ IC-LoRA 控制族（union_control/motion_control/inpaint/outpaint/ic_lora）：�
 
 - `shared` 提供各任务默认值，`jobs[]` 内字段**浅合并覆盖**（`inputs`/`generation` 同名键以 job 为准）；`client_ref` 优先级：job > shared > 批级
 - **整批原子校验**：任一非法（参数/资产/workflow 不可用）→ `422 {"detail":{"invalid_jobs":{"<下标>":"<原因>"}}}`，零入队；全部合法 → `201 {"batch_id","jobs":[id…],"queue_positions":{id:n}}`
-- **批量幂等**（wants.md §6）：带批级 `client_ref` 的重复提交返回既有批次 `200 {"batch_id","jobs":[id…],"counts":{…},"idempotent_replay":true}`，不重复入队/计费
+- **批量幂等**：带批级 `client_ref` 的重复提交返回既有批次 `200 {"batch_id","jobs":[id…],"counts":{…},"idempotent_replay":true}`，不重复入队/计费
 - 单批上限 64；空批或超限 → `400`；加入后将超队列上限 → `429`
 - 同 `runtime_profile` 任务由调度器聚组连跑；一条失败不影响批内其余（逐条独立落定状态、独立下载）
 
@@ -165,7 +165,7 @@ IC-LoRA 控制族（union_control/motion_control/inpaint/outpaint/ic_lora）：�
 
 `available=false` 时附 `reason`。提交前的可用性以本端点为准（权重、模板、硬件探测动态计算）。
 
-`cosyvoice` 组额外附 **`model` 块**（模型名称/权重版本/原生采样率/能力清单，wants.md §5）：
+`cosyvoice` 组额外附 **`model` 块**（模型名称/权重版本/原生采样率/能力清单）：
 
 ```json
 { "cosyvoice": { "workflows": { "t2a": { "available": true, "runtime": "cosyvoice" } },
@@ -208,31 +208,24 @@ IC-LoRA 控制族（union_control/motion_control/inpaint/outpaint/ic_lora）：�
 
 列表项字段：`{ id, name, description, source, kind, role, tags, license, model, version, updated_at, revisions }`。
 - `kind`：`local`（本项目授权录制）\| `community`（社区/官方示例导入）\| `cloud`（云端音色，本部署不涉及）——**兼容范围按 `model` 字段判定**
-- `role`：剧情角色映射（如 `jiwei`/`teacher`），同角色多候选音色用不同 `id` + 同 `role`
+- `role`：调用方自定义的角色/用途分组标签（自由字符串），同角色多候选音色用不同 `id` + 同 `role`
 - `tags`：声线描述标签（性别/年龄段/气质），供前端分组
 
 `POST /v1/voices`（Bearer）：
-`{ "id": "qiyuan", "name": "齐远", "prompt_asset": "<audio asset_id>", "prompt_text": "<逐字稿>", "description": "", "kind": "local", "role": "qiyuan", "tags": ["男声","青年"], "license": "演员书面授权（编号/日期）", "provenance": "录音来源", "model": "Fun-CosyVoice3-0.5B", "replace": false, "note": "换版原因" }`
+`{ "id": "narrator-m", "name": "旁白男声", "prompt_asset": "<audio asset_id>", "prompt_text": "<逐字稿>", "description": "", "kind": "local", "role": "narrator", "tags": ["男声","中年"], "license": "演员书面授权（编号/日期）", "provenance": "录音来源", "model": "Fun-CosyVoice3-0.5B", "replace": false, "note": "换版原因" }`
 
 - `prompt_asset` 必须是已上传的 `kind=audio` 资产（10–15s 单人无混响干声）；注册即时生效，无需重启，服务重启/模型运行时切换后依然可用（真相在 `config/voices.yaml`）
-- **重复注册规则**（wants.md §2）：同名 `id` 且 `replace` 缺省/false → `409`（detail 给当前 version）；`replace: true` → 旧版本自动进 `history`（保留 20 版）、`version` +1、`note` 记入历史快照——绝不静默覆盖
+- **重复注册规则**：同名 `id` 且 `replace` 缺省/false → `409`（detail 给当前 version）；`replace: true` → 旧版本自动进 `history`（保留 20 版）、`version` +1、`note` 记入历史快照——绝不静默覆盖
 - `model` 与本部署不符 → `422`（社区/模型专用预设导入时的兼容性校验，不入库）
 - 也可直接编辑服务端 `config/voices.yaml` 的 `path:` 字段（盘内路径型，须在 `/mnt/data/AV` 下）；元数据键同为可选
 
-#### 当前可用音色（实时以 `GET /v1/voices` 为准）
+#### 音色注册表归属
 
-| voice_id | 名称 | 状态 |
-|---|---|---|
-| `demo-zh-f` | 示例女声（CosyVoice 官方 zero-shot 素材，约3.5s） | ✅ 已注册，试听 `/v1/voices/demo-zh-f/preview` |
-| `demo-zh-m` | 示例男声（CosyVoice 官方 cross-lingual 素材，约13.7s 中文朗读） | ✅ 已注册，试听 `/v1/voices/demo-zh-m/preview` |
-| `jiwei` 纪伟 | 成年青年男声，克制、稍疲惫，普通说话（旁白同音色） | ⏳ 待注册（需授权参考干声） |
-| `qiyuan` 齐远 | 另一种青年男声，日常交流自然，追问礼貌但坚持 | ⏳ 待注册 |
-| `teacher` 叶老师 | 中年男声，有权威感与压力，避免吼叫 | ⏳ 待注册 |
-| `shun` 顺哥 | 独立青年男声，平常朗读书面说明 | ⏳ 待注册 |
-| `admin-a` 管理员甲 | 成年女声，意见明确 | ⏳ 待注册 |
-| `admin-b` 管理员乙 | 独立成年女声，平静表达保留意见 | ⏳ 待注册 |
-
-> `demo-*` 为技术试听/冒烟占位（社区素材，非最终配音）；计划角色每类需 ≥2 个候选，注册后自动进入列表并可试听。
+本服务是通用 TTS 服务，**不内置也不预设任何项目角色**：仓库默认注册表只含
+`demo-zh-f` / `demo-zh-m` 两条官方示例素材（技术冒烟/试听占位）。具体项目的
+角色音色由调用方通过 `POST /v1/voices` 在运行时注册——`GET /v1/voices` 永远是
+实时唯一来源，新增/替换/删除都即时生效。运行数据文件 `config/voices.yaml`
+**不入 git**（见 `.gitignore`），仓库仅保留 `config/voices.example.yaml` 说明格式。
 
 #### 自定义音色流程
 
@@ -244,7 +237,7 @@ IC-LoRA 控制族（union_control/motion_control/inpaint/outpaint/ic_lora）：�
 
 发音定制补充：多音字/专名在 `text` 内联拼音标记（官方语法 `[j][ǐ]`）；表演（情绪/语气/轻重音/方言）用 `instruction`；文本内还可插入 `[breath]` `[laughter]` `[cough]` `[sigh]` `<strong>…</strong>` 等官方细粒度标记——三者都不改动、也不会被朗读出台词本身。
 
-验收工具：服务端 `tools/cosyvoice_acceptance.py` 按剧本台词跑「默认/带指令」A/B 矩阵，自动校验 mono PCM16/时长/非静音/无削波/哈希回执/实际模式并产出听感检查清单报告。
+验收工具：服务端 `tools/cosyvoice_acceptance.py --script <台词JSON文件>` 按调用方提供的台词跑「默认/带指令」A/B 矩阵，自动校验 mono PCM16/时长/非静音/无削波/哈希回执/实际模式并产出听感检查清单报告。
 
 
 ## 5. 调度与可靠性语义（调用方可依赖的行为）

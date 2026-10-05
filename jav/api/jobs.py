@@ -52,7 +52,7 @@ def _public_output(job_id: str, o: dict) -> dict:
     dur = meta.get("duration_s")
     if dur is not None:
         out["duration_s"] = dur
-    # 回执注明实际推理模式/表演参数/声学指标（wants.md §3/§7）：worker meta
+    # 回执注明实际推理模式/表演参数/声学指标：worker meta
     # 全量透出；provider 私有字段本就只含 audio 需要的内容。
     if o["kind"] == "audio" and meta:
         out["meta"] = meta
@@ -111,7 +111,7 @@ def _enqueue(ctx, req: JobSubmit, pr: _Prepared, batch_id: str | None = None) ->
 @router.post("/jobs", status_code=201)
 async def create_job(req: JobSubmit, request: Request):
     ctx = request.app.ctx
-    # wants.md §6 幂等：client_ref 是客户端请求编号；重复提交同一 ref 返回既有
+    # 幂等：client_ref 是客户端请求编号；重复提交同一 ref 返回既有
     # job（不重复生成/计费），响应丢失后可凭 ref 复查是否已创建。
     if req.client_ref:
         existing = ctx.store.get_job_by_client_ref(req.client_ref)
@@ -131,7 +131,7 @@ async def create_batch(req: BatchSpec, request: Request):
     ctx = request.app.ctx
     if not req.jobs:
         raise HTTPException(400, detail="empty batch")
-    # 批量幂等（wants.md §6）：同一请求编号的 batch 重复提交返回既有批次。
+    # 批量幂等：同一请求编号的 batch 重复提交返回既有批次。
     if req.client_ref:
         existing = ctx.store.get_batch_by_client_ref(req.client_ref)
         if existing:

@@ -117,7 +117,7 @@ class VoiceCache:
 
 
 def _soft_limit(wav: torch.Tensor, knee: float = 0.9, ceiling: float = 0.995):
-    """Broadcast-grade safety net (wants.md §7 避免削波): above the knee the
+    """Broadcast-grade safety net (avoid clipping): above the knee the
     signal is tanh-compressed toward `ceiling` so PCM16 never hard-clips.
     Only touches samples already over the knee — inaudible for clean takes."""
     a = wav.abs()
@@ -130,7 +130,7 @@ def _soft_limit(wav: torch.Tensor, knee: float = 0.9, ceiling: float = 0.995):
 
 
 def _audio_metrics(wav: torch.Tensor, sr: int) -> dict:
-    """技术验收指标（wants.md §7/§8）：峰值/响度/削波样本数。"""
+    """技术验收指标：峰值/响度/削波样本数。"""
     import math
     a = wav.abs()
     peak = float(a.max()) if a.numel() else 0.0
@@ -185,7 +185,7 @@ def run_task(cosy: AutoModel, voices: VoiceCache, task: dict) -> tuple[str, dict
     out_path = out_dir / f"{task['job_id']}.wav"
     torchaudio.save(str(out_path), wav, out_sr, encoding="PCM_S", bits_per_sample=16)
     duration_s = round(wav.shape[1] / out_sr, 3)
-    # 溢出只做报告，绝不截断/自动加速（wants.md §7：保完整句尾）
+    # 溢出只做报告，绝不截断/自动加速（保完整句尾）
     overflow = bool(dur_limit) and duration_s > float(dur_limit)
     meta = {
         "duration_s": duration_s,

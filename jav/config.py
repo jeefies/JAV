@@ -28,7 +28,7 @@ COSYVOICE_REPO_DIR = Path(os.getenv("COSYVOICE_REPO_DIR", "/mnt/data/AV/CosyVoic
 COSYVOICE_WEIGHTS_DIR = Path(os.getenv("COSYVOICE_WEIGHTS_DIR",
                                       "/mnt/data/AV/models/Fun-CosyVoice3-0.5B"))
 COSYVOICE_PYTHON_BIN = os.getenv("COSYVOICE_PYTHON_BIN", "/mnt/data/AV/venvs/cosyvoice/bin/python")
-# Model identity surfaced to clients (wants.md §5): name + weights source +
+# Model identity surfaced to clients: name + weights source +
 # native sampling rate. 0.5B autoregressive TTS runs at 24 kHz internally;
 # the worker resamples to the caller's requested sample_rate.
 COSYVOICE_MODEL_NAME = "Fun-CosyVoice3-0.5B"

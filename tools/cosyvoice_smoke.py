@@ -40,7 +40,7 @@ def main():
 
     cases = [
         ("plain", {"provider": "cosyvoice", "workflow": "t2a",
-                   "inputs": {"text": "那之前公布的两年呢？", "voice_id": "demo-zh-f"},
+                   "inputs": {"text": "明天上午九点，老地方见。", "voice_id": "demo-zh-f"},
                    "generation": {"seed": 42}, "client_ref": "cv3-smoke-plain"}),
         ("instruct", {"provider": "cosyvoice", "workflow": "t2a",
                       "inputs": {"text": "但不会公开来说。", "voice_id": "demo-zh-f",

@@ -22,11 +22,12 @@
 | `inputs` | object | 是 | workflow 专属输入（prompt、asset_id 引用等） |
 | `generation` | object | 否 | `width`/`height`/`steps`/`guidance`/`strength`/`seed`/`duration`/`fps` 等，按 workflow 取用 |
 | `priority` | int | 否 | 默认 0，越大越优先 |
-| `client_ref` | string | 否 | 调用方自定义标签，原样回显 |
+| `client_ref` | string | 否 | **幂等请求编号**：同一 ref 重复提交返回既有任务（`200` + `idempotent_replay:true`），不重复生成/计费；提交响应丢失后可 `GET /v1/jobs?client_ref=…` 查询是否已创建 |
 
 响应与逻辑：
 - `201` → 任务对象，`status="queued"`，附 `runtime_profile` 与 `queue_position`
-- `400` 参数/资产校验失败（资产不存在、尺寸非法等）
+- `200` → 同 `client_ref` 的既有任务（幂等重放）
+- `400` 参数/资产校验失败（资产不存在、尺寸非法、**未知 inputs/generation 参数**等——参数不会被静默忽略）
 - `401` 鉴权失败
 - `415` workflow 当前不可用（`detail` 含原因）
 - `429` 队列积压达上限（默认 500）
@@ -42,7 +43,9 @@
   "created_at": "…", "started_at": "…", "finished_at": null,
   "error": null, "error_type": null, "retry_count": 0, "queue_position": 3,
   "outputs": [ { "id": "out_…", "kind": "image|video|audio", "asset_id": "asset_…",
-                 "url": "/v1/jobs/job_…/output?asset_id=out_…", "duration_s": 2.36 } ] }
+                 "url": "/v1/jobs/job_…/output?asset_id=out_…",
+                 "sha256": "…", "size_bytes": 123,
+                 "duration_s": 2.36, "meta": { "…": "audio 回执见 §4.7" } } ] }
 ```
 
 状态机：`queued → starting_runtime → running → completed | failed | cancelled`；服务端故障重启后在途任务自动回到 `queued`。
@@ -68,7 +71,7 @@
 | `mh3.ref2v` | `prompt`, `reference_images`（1–9 张） | `turbo` | 同上 |
 | `mh3.fun_control` | `prompt`, `control_video` | `control_strength`（默认 1.0，控制 canny/depth/pose/hed 风格视频） | 同上，默认 20 步 |
 | `mh3.multiframe` | `prompt`, `keyframes`（`[{image|video, time}]`，≤8，`time` 秒）, `reference_images`（1–9） | `turbo` | 同上，默认 20 步 |
-| `cosyvoice.t2a` | `text`（≤5000 字符，逐字朗读）, `voice_id`（`GET /v1/voices`）或 `reference_audio`+`reference_text`（内联试听） | `instruction`（表演指令，自然语言）, `text_frontend`（bool，默认 true） | `speed`（0.5–2.0，默认 1.0）/`sample_rate`（默认 48000）/`seed`（默认 42，确定性可缓存；-1 随机） |
+| `cosyvoice.t2a` | `text`（≤5000 字符，逐字朗读）, `voice_id`（`GET /v1/voices`）或 `reference_audio`+`reference_text`（内联试听） | `instruction`（表演指令，≤500 字符）, `text_frontend`（bool，默认 true）, `duration_limit_s`（时段溢出报告，见下） | `speed`（0.5–2.0，默认 1.0）/`sample_rate`（默认 48000）/`seed`（默认 42，确定性可缓存；-1 随机） |
 
 `cosyvoice.t2a`（配音/对白干声，CosyVoice3）：
 - 输出 **WAV 单声道 PCM**，默认 48kHz；`outputs[].duration_s` 为音频实际时长（不截断台词，时长为生成结果）
@@ -76,6 +79,10 @@
 - 多音字/专名发音：直接在 `text` 中内联拼音标记（如 `[j][ǐ]`），英文缩写支持原生文本归一
 - 同一 `voice_id` 跨句、跨场音色一致；`reference_audio`+`reference_text` 用于正式注册前的选声试听
 - `seed >= 0`（默认 42）时命中幂等缓存：相同文本+音色+指令+参数直接复用既有音频
+- **参数严格校验**：`inputs`/`generation` 只接受上表列出的键；未知键一律 `400` 明确报错，绝不"接受后忽略"
+- **台词严格保持**：`text` 逐字朗读，服务不改写、不增删、不重复、不漏读，不会把参考音频逐字稿或表演指令念进结果；不引入任何额外模型扩写台词或优化提示词。中文/英文/数字处理：`text_frontend=true` 时 wetext 自动归一数字/缩写（读法），`false` 时按原文送模型（CV3 自带归一化）；拼音/ARPAbet 标记与 `[breath]`/`[laughter]`/`[cough]`/`[sigh]`/`<strong>` 等官方控制标记原样透传生效
+- **溢出报告**：`duration_limit_s` 设定台词时段上限；产物超限时任务仍正常完成，`meta.overflow=true` + `meta.duration_limit_s` 报告之——服务端**默认绝不截断、不自动加速**，保完整句尾
+- **回执**（audio 的 `outputs[].meta`）：实际 `mode`（`zero_shot`/`instruct2`）、`instruction` 原文、`voice_id`、`seed_used`、`speed`、`text_frontend`、`sample_rate`、`duration_s`、`channels`、`peak_dbfs`、`rms_dbfs`、`clipped_samples`；另含 `sha256`/`size_bytes`（`outputs[]` 顶层）。干声输出为**单声道无损 PCM16 WAV**、无背景音乐
 
 ltx25 通用扩展：`generation.mode = "fast"`（默认）| `"high"`（两段式高清，输出约 2× 分辨率，耗时更长；仅 t2v/i2v/flf2v）。
 IC-LoRA 控制族（union_control/motion_control/inpaint/outpaint/ic_lora）：时长与画幅**跟随源视频/参考图**；`inputs.shorter_size` 128..768 且为 32 的倍数（默认 512）；`generation.strength` 0..1（guide 强度，默认 1.0）。
@@ -90,12 +97,13 @@ IC-LoRA 控制族（union_control/motion_control/inpaint/outpaint/ic_lora）：�
 
 - `shared` 提供各任务默认值，`jobs[]` 内字段**浅合并覆盖**（`inputs`/`generation` 同名键以 job 为准）；`client_ref` 优先级：job > shared > 批级
 - **整批原子校验**：任一非法（参数/资产/workflow 不可用）→ `422 {"detail":{"invalid_jobs":{"<下标>":"<原因>"}}}`，零入队；全部合法 → `201 {"batch_id","jobs":[id…],"queue_positions":{id:n}}`
+- **批量幂等**（wants.md §6）：带批级 `client_ref` 的重复提交返回既有批次 `200 {"batch_id","jobs":[id…],"counts":{…},"idempotent_replay":true}`，不重复入队/计费
 - 单批上限 64；空批或超限 → `400`；加入后将超队列上限 → `429`
-- 同 `runtime_profile` 任务由调度器聚组连跑
+- 同 `runtime_profile` 任务由调度器聚组连跑；一条失败不影响批内其余（逐条独立落定状态、独立下载）
 
 ### 1.4 `GET /v1/jobs` — 任务列表
 
-查询参数：`status`（逗号分隔多值）、`provider`、`runtime_profile`、`batch_id`、`limit`（1..500）、`offset`（≥0）。
+查询参数：`status`（逗号分隔多值）、`provider`、`runtime_profile`、`batch_id`、`client_ref`（按请求编号查已否创建）、`limit`（1..500）、`offset`（≥0）。
 返回 `{ "total": n, "jobs": [任务对象] }`。
 
 ### 1.5 `GET /v1/jobs/{id}` — 任务详情
@@ -157,6 +165,21 @@ IC-LoRA 控制族（union_control/motion_control/inpaint/outpaint/ic_lora）：�
 
 `available=false` 时附 `reason`。提交前的可用性以本端点为准（权重、模板、硬件探测动态计算）。
 
+`cosyvoice` 组额外附 **`model` 块**（模型名称/权重版本/原生采样率/能力清单，wants.md §5）：
+
+```json
+{ "cosyvoice": { "workflows": { "t2a": { "available": true, "runtime": "cosyvoice" } },
+  "model": { "name": "Fun-CosyVoice3-0.5B",
+             "weights": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512 (modelscope)",
+             "weights_fingerprint": "<llm.pt sha256 前 12 位>",
+             "code_revision": "<CosyVoice 仓库 commit>",
+             "native_sample_rate": 24000,
+             "voice_cloning": "zero-shot (10-15 s reference take + verbatim transcript)",
+             "features": { "instruction": true, "pinyin_hotfix": true,
+                           "text_frontend": true, "mono_lossless_wav": true },
+             "voice_kinds": ["local", "community", "cloud"] } } }
+```
+
 ### 4.3 `GET /v1/queue`
 
 `{ "active_profile", "state", "queued_total", "queued_by_profile": {…}, "admission_backoff": {…} }`
@@ -173,37 +196,55 @@ IC-LoRA 控制族（union_control/motion_control/inpaint/outpaint/ic_lora）：�
 
 立即释放当前驻留模型（不等空闲超时）。返回卸载前的 profile 与队列快照。有任务处于 `starting_runtime`/`running` 时返回 **409**（绝不中途打断在途任务；需先取消对应任务）。
 
-### 4.7 `GET /v1/voices` · `POST /v1/voices` · `GET /v1/voices/{id}/sample`
+### 4.7 角色音色库（`/v1/voices` 全套）
 
-`t2a` 角色音色列表：`{ "voices": [ { "id", "name", "description", "source": "asset"|"file" } ] }`（不含参考音频路径与逐字稿）。
+| 端点 | 用途 |
+|---|---|
+| `GET /v1/voices` | 音色列表（含 kind/role/tags/license/model/version 元数据，不含路径与逐字稿） |
+| `GET /v1/voices/{id}` | 音色详情 + 版本历史 + 参考素材技术事实（时长/采样率/字节/sha256） |
+| `GET /v1/voices/{id}/preview` | 参考干声试听（`audio/wav`）；未注册 404，素材缺失 410。旧别名 `/sample` 仍可用 |
+| `POST /v1/voices` | 注册（201）/显式替换（200）。**默认拒绝重复注册**（409），不默默覆盖 |
+| `DELETE /v1/voices/{id}` | 删除注册；历史产物不受影响，后续引用该 id 的任务提交即 400 |
 
-`GET /v1/voices/{id}/sample` 返回该音色的**参考干声**（`audio/wav` 等，供试听）；未注册 404，素材文件缺失 410。
+列表项字段：`{ id, name, description, source, kind, role, tags, license, model, version, updated_at, revisions }`。
+- `kind`：`local`（本项目授权录制）\| `community`（社区/官方示例导入）\| `cloud`（云端音色，本部署不涉及）——**兼容范围按 `model` 字段判定**
+- `role`：剧情角色映射（如 `jiwei`/`teacher`），同角色多候选音色用不同 `id` + 同 `role`
+- `tags`：声线描述标签（性别/年龄段/气质），供前端分组
 
-`POST /v1/voices`（Bearer）注册/替换音色：`{ "id": "qiyuan", "name": "齐远", "prompt_asset": "<audio asset_id>", "prompt_text": "<参考音频逐字稿>", "description": "" }`。`prompt_asset` 必须是已上传的 `kind=audio` 资产（10–15s 单人无混响干声）。注册即时生效，无需重启。
+`POST /v1/voices`（Bearer）：
+`{ "id": "qiyuan", "name": "齐远", "prompt_asset": "<audio asset_id>", "prompt_text": "<逐字稿>", "description": "", "kind": "local", "role": "qiyuan", "tags": ["男声","青年"], "license": "演员书面授权（编号/日期）", "provenance": "录音来源", "model": "Fun-CosyVoice3-0.5B", "replace": false, "note": "换版原因" }`
 
-#### 当前可用音色
+- `prompt_asset` 必须是已上传的 `kind=audio` 资产（10–15s 单人无混响干声）；注册即时生效，无需重启，服务重启/模型运行时切换后依然可用（真相在 `config/voices.yaml`）
+- **重复注册规则**（wants.md §2）：同名 `id` 且 `replace` 缺省/false → `409`（detail 给当前 version）；`replace: true` → 旧版本自动进 `history`（保留 20 版）、`version` +1、`note` 记入历史快照——绝不静默覆盖
+- `model` 与本部署不符 → `422`（社区/模型专用预设导入时的兼容性校验，不入库）
+- 也可直接编辑服务端 `config/voices.yaml` 的 `path:` 字段（盘内路径型，须在 `/mnt/data/AV` 下）；元数据键同为可选
+
+#### 当前可用音色（实时以 `GET /v1/voices` 为准）
 
 | voice_id | 名称 | 状态 |
 |---|---|---|
-| `demo-zh-f` | 示例女声（CosyVoice 官方 zero-shot 素材） | ✅ 已注册，可试听：`GET /v1/voices/demo-zh-f/sample` |
-| `jiwei` 纪伟 | 20–25 岁男声，中音偏低，朴素自然（旁白同音色） | ⏳ 待注册（需授权参考干声） |
-| `qiyuan` 齐远 | 20–25 岁男声，比纪伟稍明亮清晰 | ⏳ 待注册 |
-| `teacher` 叶老师 | 45–60 岁男声，中低音有厚度 | ⏳ 待注册 |
-| `shun` 顺哥 | 青年男声，平稳自信 | ⏳ 待注册 |
-| `admin-a` 管理员甲 | 清晰青年女声 | ⏳ 待注册 |
-| `admin-b` 管理员乙 | 稍低稍稳成年女声 | ⏳ 待注册 |
+| `demo-zh-f` | 示例女声（CosyVoice 官方 zero-shot 素材，约3.5s） | ✅ 已注册，试听 `/v1/voices/demo-zh-f/preview` |
+| `demo-zh-m` | 示例男声（CosyVoice 官方 cross-lingual 素材，约13.7s 中文朗读） | ✅ 已注册，试听 `/v1/voices/demo-zh-m/preview` |
+| `jiwei` 纪伟 | 成年青年男声，克制、稍疲惫，普通说话（旁白同音色） | ⏳ 待注册（需授权参考干声） |
+| `qiyuan` 齐远 | 另一种青年男声，日常交流自然，追问礼貌但坚持 | ⏳ 待注册 |
+| `teacher` 叶老师 | 中年男声，有权威感与压力，避免吼叫 | ⏳ 待注册 |
+| `shun` 顺哥 | 独立青年男声，平常朗读书面说明 | ⏳ 待注册 |
+| `admin-a` 管理员甲 | 成年女声，意见明确 | ⏳ 待注册 |
+| `admin-b` 管理员乙 | 独立成年女声，平静表达保留意见 | ⏳ 待注册 |
 
-以 `GET /v1/voices` 实时返回为准；后六个为《公示期》计划角色 ID，注册后即出现在列表中。
+> `demo-*` 为技术试听/冒烟占位（社区素材，非最终配音）；计划角色每类需 ≥2 个候选，注册后自动进入列表并可试听。
 
 #### 自定义音色流程
 
-1. **准备素材**：目标角色 10–15 秒普通话**干声**（单人、无 BGM/混响、正常交谈语气）＋ 与音频完全一致的逐字稿。素材必须来自授权演员或授权音色库。
+1. **准备素材**：目标角色 10–15 秒普通话**干声**（单人、无 BGM/混响、自然交谈语气，克制表达优先）＋ 与音频**完全一致**的逐字稿。素材必须来自授权演员或已获许可的音色库，`license`/`provenance` 字段记录来源与许可。
 2. **上传**：`POST /v1/assets?kind=audio`（raw body 或 `/v1/assets/upload` multipart），记下返回的资产 `id`。
-3. **注册**：`POST /v1/voices` 带 `{id, name, prompt_asset, prompt_text}`。`id` 规则 `[a-z0-9][a-z0-9_-]{0,31}`；同名再提交为**覆盖替换**。也可直接编辑服务端 `config/voices.yaml` 的 `path:` 字段（盘内路径型，须在 `/mnt/data/AV` 下）。
-4. **试听验证**：`GET /v1/voices/{id}/sample` 回听参考素材；再用该 `voice_id` 提交一两句 `t2a` 小样。
+3. **注册**：`POST /v1/voices` 带 `{id, name, prompt_asset, prompt_text, kind, role, tags, license, provenance}`。`id` 规则 `[a-z0-9][a-z0-9_-]{0,31}`；新角色直接注册；换声用 `replace:true + note`（旧版入历史，可查 `GET /v1/voices/{id}` 回滚参考）。社区音色导入同样走资产注册（`kind: "community"`），`model` 不符会被 422 拒绝。
+4. **试听验证**：`GET /v1/voices/{id}/preview` 回听参考干声；再用该 `voice_id` 跑一两句实际台词小样（建议同一句跑默认/instruct 两个变体 A/B）。
 5. **未注册先试听（内联）**：跳过第 3 步，直接在任务里传 `reference_audio`+`reference_text`（成对），适合多段候选素材横向比声；不写注册表。
 
-发音定制补充：多音字/专名在 `text` 内联拼音标记（官方语法 `[j][ǐ]`）；表演（情绪/语气/轻重音/方言）用 `instruction`，两者都不改动台词本身。
+发音定制补充：多音字/专名在 `text` 内联拼音标记（官方语法 `[j][ǐ]`）；表演（情绪/语气/轻重音/方言）用 `instruction`；文本内还可插入 `[breath]` `[laughter]` `[cough]` `[sigh]` `<strong>…</strong>` 等官方细粒度标记——三者都不改动、也不会被朗读出台词本身。
+
+验收工具：服务端 `tools/cosyvoice_acceptance.py` 按剧本台词跑「默认/带指令」A/B 矩阵，自动校验 mono PCM16/时长/非静音/无削波/哈希回执/实际模式并产出听感检查清单报告。
 
 
 ## 5. 调度与可靠性语义（调用方可依赖的行为）

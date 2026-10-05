@@ -87,21 +87,59 @@ def _cleanup_after_generation():
 
 
 class VoiceCache:
-    """add_zero_shot_spk 结果只在进程内注册一次（不写 spk2info.pt：模型目录
-    是只读快照，音色真相在 voices.yaml，重启后按需重建）。"""
+    """add_zero_shot_spk 结果只在进程内注册（不写 spk2info.pt：模型目录
+    是只读快照，音色真相在 voices.yaml，重启后按需重建）。
+
+    缓存键含参考文件的 (mtime,size) 与逐字稿：注册表里同名音色被 replace
+    后，签名变化 → 重新提特征，不再吃进程内的陈旧 embedding。"""
 
     def __init__(self, cosy):
         self.cosy = cosy
-        self.registered: set[str] = set()
+        self.registered: dict[str, tuple] = {}
+
+    @staticmethod
+    def _sig(prompt_wav: str, prompt_text: str) -> tuple:
+        try:
+            st = os.stat(prompt_wav)
+            return (st.st_mtime_ns, st.st_size, prompt_text)
+        except OSError:
+            return (0, 0, prompt_text)
 
     def ensure(self, voice_id: str, prompt_text: str, prompt_wav: str):
-        if voice_id in self.registered:
+        sig = self._sig(prompt_wav, prompt_text)
+        if self.registered.get(voice_id) == sig:
             return
         full_text = f"{INSTRUCT_SYSTEM}{prompt_text}"
         if not self.cosy.add_zero_shot_spk(full_text, prompt_wav, voice_id):
             raise RuntimeError(f"add_zero_shot_spk failed for {voice_id}")
-        self.registered.add(voice_id)
+        self.registered[voice_id] = sig
         logger.info(f"voice registered: {voice_id}")
+
+
+def _soft_limit(wav: torch.Tensor, knee: float = 0.9, ceiling: float = 0.995):
+    """Broadcast-grade safety net (wants.md §7 避免削波): above the knee the
+    signal is tanh-compressed toward `ceiling` so PCM16 never hard-clips.
+    Only touches samples already over the knee — inaudible for clean takes."""
+    a = wav.abs()
+    if float(a.max()) <= knee:
+        return wav, 0
+    over = a > knee
+    span = ceiling - knee
+    limited = torch.sign(wav) * (knee + span * torch.tanh((a - knee) / span))
+    return torch.where(over, limited, wav), int(over.sum())
+
+
+def _audio_metrics(wav: torch.Tensor, sr: int) -> dict:
+    """技术验收指标（wants.md §7/§8）：峰值/响度/削波样本数。"""
+    import math
+    a = wav.abs()
+    peak = float(a.max()) if a.numel() else 0.0
+    rms = float(wav.pow(2).mean().sqrt()) if wav.numel() else 0.0
+    return {
+        "peak_dbfs": round(20 * math.log10(peak), 2) if peak > 0 else -120.0,
+        "rms_dbfs": round(20 * math.log10(rms), 2) if rms > 0 else -120.0,
+        "clipped_samples": int((a >= 0.999).sum()),
+    }
 
 
 def run_task(cosy: AutoModel, voices: VoiceCache, task: dict) -> tuple[str, dict]:
@@ -109,6 +147,7 @@ def run_task(cosy: AutoModel, voices: VoiceCache, task: dict) -> tuple[str, dict
     speed = float(task.get("speed", 1.0))
     seed = int(task.get("seed", 42))
     out_sr = int(task.get("sample_rate", 48000))
+    dur_limit = task.get("duration_limit_s")
     prompt_wav = task["prompt_wav"]
     if not prompt_wav or not os.path.exists(prompt_wav):
         raise ValueError(f"reference audio missing: {prompt_wav!r}")
@@ -133,6 +172,10 @@ def run_task(cosy: AutoModel, voices: VoiceCache, task: dict) -> tuple[str, dict
     if not chunks:
         raise RuntimeError("empty synthesis result")
     wav = torch.cat(chunks, dim=1).float()
+    # 干声必须是单声道（可直接进剪辑轨道）；模型偶发多声道时坍缩到均值
+    if wav.shape[0] > 1:
+        wav = wav.mean(dim=0, keepdim=True)
+    wav, limited_n = _soft_limit(wav)
     model_sr = cosy.sample_rate
     if out_sr != model_sr:
         wav = torchaudio.functional.resample(wav, model_sr, out_sr)
@@ -141,15 +184,27 @@ def run_task(cosy: AutoModel, voices: VoiceCache, task: dict) -> tuple[str, dict
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{task['job_id']}.wav"
     torchaudio.save(str(out_path), wav, out_sr, encoding="PCM_S", bits_per_sample=16)
+    duration_s = round(wav.shape[1] / out_sr, 3)
+    # 溢出只做报告，绝不截断/自动加速（wants.md §7：保完整句尾）
+    overflow = bool(dur_limit) and duration_s > float(dur_limit)
     meta = {
-        "duration_s": round(wav.shape[1] / out_sr, 3),
+        "duration_s": duration_s,
         "sample_rate": out_sr,
         "model_sample_rate": model_sr,
         "channels": int(wav.shape[0]),
         "voice_id": voice_id,
         "mode": "instruct2" if instruct else "zero_shot",
         "seed_used": seed,
+        "instruction": task.get("instruction") or None,
+        "speed": speed,
+        "text_frontend": tfe,
+        **_audio_metrics(wav, out_sr),
     }
+    if limited_n:
+        meta["soft_limited_samples"] = limited_n
+    if dur_limit:
+        meta["duration_limit_s"] = float(dur_limit)
+        meta["overflow"] = overflow
     return str(out_path), meta
 
 

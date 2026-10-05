@@ -1,7 +1,29 @@
 # cosyvoice.t2a 角色音色注册表（实现说明见 jav/voices.py）
 # 每条: id 唯一; prompt_text 为参考干声的逐字稿; asset(资产 id) 与 path(盘内文件) 二选一。
+# 管理规则：重复注册默认 409 拒绝，POST /v1/voices replace=true 才覆盖（旧版进 history）。
 - id: demo-zh-f
   name: 示例女声（CosyVoice 官方 zero-shot 素材）
   prompt_text: 希望你以后能够做的比我还好呦。
   path: /mnt/data/AV/CosyVoice/asset/zero_shot_prompt.wav
-  description: 约10s 普通话单人干声；仅作冒烟/试听占位，正式角色用 POST /v1/voices 注册授权素材
+  description: 约3.5s 普通话单人干声；仅作冒烟/试听占位，正式角色用 POST /v1/voices 注册授权素材
+  kind: community
+  tags: [中文, 女声, 温和]
+  license: Apache-2.0（CosyVoice 仓库官方示例素材）
+  provenance: CosyVoice 官方仓库 asset/zero_shot_prompt.wav（example.py 逐字稿）
+  model: Fun-CosyVoice3-0.5B
+  version: 1
+  created_at: "2026-10-04T16:00:00Z"
+  updated_at: "2026-10-05T04:00:00Z"
+- id: demo-zh-m
+  name: 示例男声（CosyVoice 官方 cross-lingual 素材）
+  prompt_text: 在那之后完全收购那家公司，因此保持管理层的一致性，利益与即将加入家族的资产保持一致，这就是我们有时不买下全部的原因。
+  path: /mnt/data/AV/CosyVoice/asset/cross_lingual_prompt.wav
+  description: 约13.7s 中文成年男声（商务话题朗读）；参考音频逐字稿经 whisper 转写并与官方 example.py 目标句核对；仅作技术试听候选，非最终角色配音
+  kind: community
+  tags: [中文, 男声, 中年, 沉稳]
+  license: Apache-2.0（CosyVoice 仓库官方示例素材）
+  provenance: CosyVoice 官方仓库 asset/cross_lingual_prompt.wav（whisper 转写 + example.py 对照校正）
+  model: Fun-CosyVoice3-0.5B
+  version: 1
+  created_at: "2026-10-05T04:00:00Z"
+  updated_at: "2026-10-05T04:00:00Z"

@@ -81,8 +81,13 @@
     且**逐句携带 prompt_wav**（zero_shot_spk_id 路径会丢弃 instruct 文本，勿"优化"复用注册捷径）
   - `generation.speed` 0.5..2.0（默认 1.0）；`sample_rate` 默认 48000（模型 24k 重采样，
     输出 WAV 单声道 PCM16）；`seed` 默认 **42**（确定性，同参数命中缓存）；
-    `inputs.text_frontend`（默认 true；wetext FST 缺失时官方自动降级）
-  - 输出 outputs[] 带 `duration_s`（生成结果实测时长，永不截断台词）
+    `inputs.text_frontend`（默认 true；wetext FST 缺失时官方自动降级）；
+    `inputs.duration_limit_s`（时段上限：超限仅 meta.overflow=true 报告，永不截断/加速）
+  - **参数白名单**：inputs/generation 未知键直接 400（wants.md §3"不接受后忽略"）；
+    instruction ≤500 字符
+  - 输出 outputs[] 带 `duration_s` + `sha256` + `size_bytes` + `meta`（回执：实际
+    `mode` zero_shot/instruct2、`instruction` 原文、`seed_used`、`speed`、`text_frontend`、
+    `sample_rate`、`peak_dbfs`、`rms_dbfs`、`clipped_samples`，见 worker `_audio_metrics`）
   - 多音字：`text` 内联拼音标记（`[j][ǐ]` 官方 hotfix 语法）直接透传
 
 ## 任务
@@ -101,8 +106,11 @@
 }
 ```
 - 201 → `{id, status:"queued", runtime_profile, queue_position, ...}`
+- **client_ref 幂等（wants.md §6）**：同 ref 重复提交 → 200 返回既有任务
+  `{..., "idempotent_replay": true}`，不重复入队/计费；响应丢失后可
+  `GET /v1/jobs?client_ref=…` 复查
 - 415：workflow 不可用（`{"detail":"... unavailable: <reason>"}`）
-- 400：参数/资产校验失败；429：队列积压超限（500）
+- 400：参数/资产校验失败（含未知参数键）；429：队列积压超限（500）
 - `seed >= 0` 时启用缓存命中：完全相同参数的已完成任务直接返回 `status:"completed"`
 - `inputs.image`：i2i 必填；`inputs.mask`：inpaint 必填（白色=重绘，黑色=保留）
 
@@ -117,11 +125,12 @@
 }
 ```
 - 整批原子校验：任一 job 非法 → 422 `{"detail":{"invalid_jobs":{index: reason}}}`，零入队
+- 批级 `client_ref` 幂等：重复提交 → 200 `{batch_id, jobs, counts, idempotent_replay:true}`
 - 201 → `{batch_id, jobs:[id...], queue_positions:{id: n}}`
 - 上限 64 jobs/批；同 profile 任务由调度器聚组连跑（省 runtime 切换）
 
 ### GET /v1/jobs
-过滤参数：`status`（逗号分隔多值）、`runtime_profile`、`batch_id`、`provider`、`limit`、`offset`
+过滤参数：`status`（逗号分隔多值）、`runtime_profile`、`batch_id`、`provider`、`client_ref`、`limit`、`offset`
 返回 `{total, jobs:[<public job>]}`
 
 ### GET /v1/jobs/{id}
@@ -172,13 +181,20 @@
 ## 系统
 - `GET /v1/capabilities` — 每个 workflow 的 `available` 由
   权重在盘 × 模板实现 × 硬件 smoke 标志动态计算；`reason` 说明不可用原因
-- `GET /v1/voices` — cosyvoice 角色音色注册表（id/name/description/source，
-  不泄漏参考路径）
-- `GET /v1/voices/{id}/sample` — 该音色的参考干声试听（FileResponse，按注册表解析
-  asset/path，不拼接请求参数；未注册 404，素材缺失 410）
-- `POST /v1/voices` — 注册/替换音色（Bearer）：`{id, name?, prompt_asset(kind=audio
-  资产 id), prompt_text(逐字稿), description?}`；写 `config/voices.yaml`（原子替换），
-  即时生效无需重启。文件路径型条目直接编辑 voices.yaml 的 `path:`（须在 /mnt/data/AV 内）
+- `GET /v1/voices` — 音色注册表：id/name/description/source/**kind/role/tags/license/
+  model/version/updated_at/revisions**（不泄漏路径与逐字稿）
+- `GET /v1/voices/{id}` — 详情 + `history` 版本列表 + `reference` 技术事实
+  （soundfile 探测时长/采样率/声道 + sha256/bytes；asset 型带 asset_id）
+- `GET /v1/voices/{id}/preview` — 参考干声试听（FileResponse，按注册表解析 asset/path，
+  不拼接请求参数；未注册 404，素材缺失 410）；旧别名 `/sample` 兼容保留
+- `POST /v1/voices` — 注册（Bearer）：`{id, name?, prompt_asset(kind=audio 资产 id),
+  prompt_text(逐字稿), description?, kind?, role?, tags?, license?, provenance?, model?,
+  replace?, note?}`；**重复 id 默认 409**，`replace:true` 才覆盖且旧版进 history、
+  version+1（wants.md §2 不默默覆盖）；`model` 与本部署不符 422；写 `config/voices.yaml`
+  （原子替换），即时生效。文件路径型条目直接编辑 voices.yaml 的 `path:`（限 /mnt/data/AV）
+- `DELETE /v1/voices/{id}` — 删除注册（产物/资产不动）；不存在 404
+- `GET /v1/capabilities` 的 cosyvoice 组附 `model` 块（名称/权重 sha 指纹/code_revision/
+  native_sample_rate/features/voice_kinds，见 capabilities.py `_cosyvoice_model_info`）
 - `GET /v1/queue` — `{active_profile, state, streak, queued_by_profile,
   queued_total, admission_backoff}`
 - `GET /v1/runtime` — 当前 runtime 进程/RAM/swap/VRAM 指标 + 最近切换事件

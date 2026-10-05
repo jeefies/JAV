@@ -242,3 +242,175 @@ def test_voice_sample_endpoint(app_client, registry):
     assert r3.status_code == 200 and r3.content == b"wavdata"
     assert app_client.get("/v1/voices/ghost/sample").status_code == 404
     p.unlink(missing_ok=True)
+
+
+# ---------------- wants.md v2: strict params ----------------
+def test_strict_param_rejection(registry):
+    # 未知 input / generation key 明确报错，不能接受后忽略（§3）
+    with pytest.raises(ValueError, match="unsupported input"):
+        cv.normalize("t2a", {"text": "x", "voice_id": "qiyuan", "emotion": "sad"}, {})
+    with pytest.raises(ValueError, match="unsupported generation"):
+        cv.normalize("t2a", {"text": "x", "voice_id": "qiyuan"}, {"temp": 0.7})
+    with pytest.raises(ValueError, match="instruction too long"):
+        cv.normalize("t2a", {"text": "x", "voice_id": "qiyuan",
+                             "instruction": "长" * 501}, {})
+    with pytest.raises(ValueError, match="duration_limit_s"):
+        cv.normalize("t2a", {"text": "x", "voice_id": "qiyuan", "duration_limit_s": 0}, {})
+    p = cv.normalize("t2a", {"text": "x", "voice_id": "qiyuan", "duration_limit_s": 4.0}, {})
+    assert p["duration_limit_s"] == 4.0 and p["instruction"] == ""
+
+
+# ---------------- voices registry v2: no silent overwrite ----------------
+def test_register_409_replace_history(registry):
+    v, created = voices.register_voice({"id": "jiwei", "asset": "a1",
+                                        "prompt_text": "第一版逐字稿。", "name": "纪伟"})
+    assert created and v["version"] == 1
+    # 重复注册默认拒绝——不默默覆盖（§2）
+    with pytest.raises(voices.VoiceError) as ei:
+        voices.register_voice({"id": "jiwei", "asset": "a2", "prompt_text": "换人"})
+    assert ei.value.status == 409 and "replace=true" in str(ei.value)
+    assert voices.get_voice("jiwei")["asset"] == "a1"     # 未被动过
+    # 显式 replace：版本 +1，旧内容进 history
+    v2, created2 = voices.register_voice({"id": "jiwei", "asset": "a2",
+                                          "prompt_text": "新逐字稿", "name": "纪伟B"},
+                                         replace=True, note="候选B胜出")
+    assert not created2 and v2["version"] == 2
+    assert v2["asset"] == "a2" and v2["revisions"] if "revisions" in v2 else True
+    hist = v2["history"]
+    assert hist and hist[-1]["asset"] == "a1" and hist[-1]["note"] == "候选B胜出"
+    got = voices.delete_voice("jiwei")
+    assert got["asset"] == "a2"
+    with pytest.raises(voices.VoiceError) as ei:
+        voices.delete_voice("jiwei")
+    assert ei.value.status == 404
+
+
+def test_voice_metadata_fields(registry):
+    v, _ = voices.register_voice({
+        "id": "comm-m1", "asset": "a9", "prompt_text": "逐字稿",
+        "kind": "community", "role": "qiyuan", "tags": ["male", "bright"],
+        "license": "CC-BY-4.0", "provenance": "https://example.org/voice-pack",
+        "model": "Fun-CosyVoice3-0.5B"})
+    pv = voices.public_view({"comm-m1": v})[0]
+    assert pv["kind"] == "community" and pv["role"] == "qiyuan"
+    assert pv["license"] == "CC-BY-4.0" and pv["version"] == 1
+    dv = voices.detail_view(v)
+    assert dv["provenance"].startswith("https://") and dv["transcript_chars"] > 0
+    assert "path" not in dv and "prompt_text" not in dv   # 不泄漏
+    with pytest.raises(voices.VoiceError, match="kind"):
+        voices.register_voice({"id": "bad-k", "asset": "a", "prompt_text": "x",
+                               "kind": "magic"})
+
+
+# ---------------- API v2 ----------------
+def _mk_asset(app_client):
+    a = app_client.post("/v1/assets?kind=audio", content=b"RIFFaud",
+                        headers={"x-filename": "ref.wav"})
+    return a.json()["id"]
+
+
+def test_voices_api_v2(app_client, registry):
+    aid = _mk_asset(app_client)
+    body = {"id": "qy2", "prompt_asset": aid, "prompt_text": "逐字稿。"}
+    r = app_client.post("/v1/voices", json=body)
+    assert r.status_code == 201, r.text
+    assert r.json()["version"] == 1 and r.json()["replaced"] is False
+    # 默默覆盖被禁止：409
+    assert app_client.post("/v1/voices", json=body).status_code == 409
+    rep = app_client.post("/v1/voices", json={**body, "replace": True, "note": "v2"})
+    assert rep.status_code == 200 and rep.json()["version"] == 2
+    # 详情：版本列表、无路径/逐字稿泄漏
+    d = app_client.get("/v1/voices/qy2")
+    assert d.status_code == 200
+    dj = d.json()
+    assert dj["version"] == 2 and len(dj["revisions"]) == 1
+    assert dj["reference"]["available"] is True and dj["reference"]["bytes"] == 7
+    assert "prompt_text" not in dj and "path" not in dj
+    # 不兼容模型声明 422（不静默入库）
+    bad = app_client.post("/v1/voices", json={**body, "id": "qy3",
+                                              "model": "CosyVoice2-0.5B"})
+    assert bad.status_code == 422
+    # preview 正名 + sample 别名兼容
+    for ep in ("preview", "sample"):
+        pr = app_client.get(f"/v1/voices/qy2/{ep}")
+        assert pr.status_code == 200 and pr.content == b"RIFFaud"
+    assert app_client.get("/v1/voices/ghost/preview").status_code == 404
+    assert app_client.get("/v1/voices/ghost").status_code == 404
+    # 删除后引用任务快速失败
+    assert app_client.delete("/v1/voices/qy2").json()["deleted"] is True
+    assert app_client.get("/v1/voices/qy2").status_code == 404
+    _seed_flags()
+    job = app_client.post("/v1/jobs", json={
+        "provider": "cosyvoice", "workflow": "t2a",
+        "inputs": {"text": "喂", "voice_id": "qy2"}})
+    assert job.status_code == 400 and "unknown voice_id" in job.text
+    assert app_client.delete("/v1/voices/qy2").status_code == 404
+
+
+def test_strict_params_api(app_client, registry):
+    _seed_flags()
+    _write_voices([{"id": "qiyuan", "prompt_text": "稿",
+                    "path": str(config.DATA_DIR / "refs/qy.wav")}])
+    r = app_client.post("/v1/jobs", json={
+        "provider": "cosyvoice", "workflow": "t2a",
+        "inputs": {"text": "x", "voice_id": "qiyuan", "pitch": 3}})
+    assert r.status_code == 400 and "unsupported input" in r.text
+    r2 = app_client.post("/v1/jobs", json={
+        "provider": "cosyvoice", "workflow": "t2a",
+        "inputs": {"text": "x", "voice_id": "qiyuan"},
+        "generation": {"temp": 1}})
+    assert r2.status_code == 400 and "unsupported generation" in r2.text
+
+
+def test_idempotent_submit_and_replay(app_client, registry):
+    _seed_flags()
+    _write_voices([{"id": "qiyuan", "prompt_text": "稿",
+                    "path": str(config.DATA_DIR / "refs/qy.wav")}])
+    spec = {**T2A, "client_ref": "ep01-line-07"}
+    r1 = app_client.post("/v1/jobs", json=spec)
+    assert r1.status_code == 201
+    j1 = r1.json()["id"]
+    r2 = app_client.post("/v1/jobs", json=spec)   # 响应丢失后重试同编号
+    assert r2.status_code == 200 and r2.json()["idempotent_replay"] is True
+    assert r2.json()["id"] == j1                  # 不重复生成/计费
+    q = app_client.get("/v1/jobs?client_ref=ep01-line-07")
+    assert q.json()["total"] == 1 and q.json()["jobs"][0]["id"] == j1
+    # 批量：同 batch client_ref 重放
+    batch = {"shared": {"provider": "cosyvoice", "workflow": "t2a"},
+             "client_ref": "ep01-all",
+             "jobs": [{"inputs": {"text": "甲", "voice_id": "qiyuan"}},
+                      {"inputs": {"text": "乙", "voice_id": "qiyuan"},
+                       "client_ref": "ep01-b"}]}
+    b1 = app_client.post("/v1/jobs/batch", json=batch)
+    assert b1.status_code == 201, b1.text
+    b2 = app_client.post("/v1/jobs/batch", json=batch)
+    assert b2.status_code == 200 and b2.json()["idempotent_replay"] is True
+    assert b2.json()["batch_id"] == b1.json()["batch_id"]
+    assert sorted(b2.json()["jobs"]) == sorted(b1.json()["jobs"])
+
+
+def test_audio_receipt_fields(app_client, registry):
+    _seed_flags()
+    _write_voices([{"id": "qiyuan", "prompt_text": "稿",
+                    "path": str(config.DATA_DIR / "refs/qy.wav")}])
+    r = app_client.post("/v1/jobs", json=T2A)
+    jid = r.json()["id"]
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        body = app_client.get(f"/v1/jobs/{jid}").json()
+        if body["status"] in ("completed", "failed", "cancelled"):
+            break
+        time.sleep(0.15)
+    o = body["outputs"][0]
+    assert len(o["sha256"]) == 64 and o["size_bytes"] > 0
+    assert o["meta"]["mode"] in ("zero_shot", "instruct2")
+    assert o["meta"]["voice_id"] == "qiyuan"
+    assert "duration_s" in o["meta"]
+
+
+def test_capabilities_model_block(app_client):
+    caps = app_client.get("/v1/capabilities").json()
+    m = caps["cosyvoice"]["model"]
+    assert m["name"] == "Fun-CosyVoice3-0.5B" and m["native_sample_rate"] == 24000
+    assert m["weights_fingerprint"] is None or len(m["weights_fingerprint"]) == 12
+    assert m["features"]["instruction"] is True

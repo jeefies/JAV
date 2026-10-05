@@ -203,7 +203,7 @@ class Store:
         return (r["n"] if r else 0) + 1
 
     def list_jobs(self, status=None, runtime_profile=None, batch_id=None,
-                  provider=None, limit=100, offset=0) -> dict:
+                  provider=None, client_ref=None, limit=100, offset=0) -> dict:
         where, params = [], []
         if status:
             vals = status.split(",")
@@ -212,7 +212,8 @@ class Store:
             where.append(clause)
             params.extend(vals)
         for col, val in (("runtime_profile", runtime_profile),
-                         ("batch_id", batch_id), ("provider", provider)):
+                         ("batch_id", batch_id), ("provider", provider),
+                         ("client_ref", client_ref)):
             if val:
                 where.append(f"{col}=?")
                 params.append(val)
@@ -226,6 +227,18 @@ class Store:
             r["payload"] = json.loads(r["payload"])
             r["assets"] = json.loads(r["assets"])
         return {"total": total, "jobs": rows}
+
+    def get_job_by_client_ref(self, ref: str) -> dict | None:
+        """提交响应丢失后的按请求编号查询（wants.md §6）。"""
+        row = self._one(
+            "SELECT id FROM jobs WHERE client_ref=? ORDER BY created_at DESC, id LIMIT 1",
+            (ref,))
+        return self.get_job(row["id"]) if row else None
+
+    def get_batch_by_client_ref(self, ref: str) -> dict | None:
+        row = self._one("SELECT id FROM batches WHERE client_ref=? ORDER BY created_at DESC LIMIT 1",
+                        (ref,))
+        return self.get_batch(row["id"]) if row else None
 
     def find_cache_hit(self, cache_key: str) -> dict | None:
         # deterministic providers are zit (images) and cosyvoice (audio);
@@ -329,7 +342,8 @@ class Store:
 
     def get_outputs(self, job_id: str) -> list[dict]:
         return self._with_asset_meta(self._rows(
-            """SELECT o.*, a.meta AS asset_meta FROM outputs o
+            """SELECT o.*, a.meta AS asset_meta, a.sha256 AS asset_sha256,
+                      a.size AS asset_size FROM outputs o
                LEFT JOIN assets a ON a.id=o.asset_id
                WHERE o.job_id=? ORDER BY o.created_at""", (job_id,)))
 
@@ -340,7 +354,8 @@ class Store:
         out: dict[str, list[dict]] = {jid: [] for jid in job_ids}
         q = ",".join("?" * len(job_ids))
         rows = self._with_asset_meta(self._rows(
-            f"""SELECT o.*, a.meta AS asset_meta FROM outputs o
+            f"""SELECT o.*, a.meta AS asset_meta, a.sha256 AS asset_sha256,
+                      a.size AS asset_size FROM outputs o
                 LEFT JOIN assets a ON a.id=o.asset_id
                 WHERE o.job_id IN ({q}) ORDER BY o.created_at""",
             tuple(job_ids)))

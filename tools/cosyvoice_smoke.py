@@ -41,17 +41,17 @@ def main():
     cases = [
         ("plain", {"provider": "cosyvoice", "workflow": "t2a",
                    "inputs": {"text": "那之前公布的两年呢？", "voice_id": "demo-zh-f"},
-                   "generation": {"seed": 42}, "client_ref": "cv3-smoke"}),
+                   "generation": {"seed": 42}, "client_ref": "cv3-smoke-plain"}),
         ("instruct", {"provider": "cosyvoice", "workflow": "t2a",
                       "inputs": {"text": "但不会公开来说。", "voice_id": "demo-zh-f",
                                  "instruction": "用平常的语气说，克制，带一点疲惫"},
-                      "generation": {"seed": 7}, "client_ref": "cv3-smoke"}),
+                      "generation": {"seed": 7}, "client_ref": "cv3-smoke-instruct"}),
         ("speed-inline", {"provider": "cosyvoice", "workflow": "t2a",
                           "inputs": {"text": "你好，测试语速与内联参考音频。",
                                      "reference_audio": None, "reference_text":
                                      "希望你以后能够做的比我还好呦。"},
                           "generation": {"speed": 0.9, "seed": 11},
-                          "client_ref": "cv3-smoke"}),
+                          "client_ref": "cv3-smoke-inline"}),
     ]
     ref_wav = Path("/mnt/data/AV/CosyVoice/asset/zero_shot_prompt.wav")
     up = requests.post(f"{BASE}/v1/assets?kind=audio", data=ref_wav.read_bytes(),
@@ -62,7 +62,7 @@ def main():
     jobs = []
     for tag, body in cases:
         r = requests.post(f"{BASE}/v1/jobs", json=body, headers=H, timeout=30)
-        if r.status_code != 201:
+        if r.status_code not in (200, 201):   # 200 = client_ref 幂等重放
             raise SystemExit(f"[{tag}] submit failed {r.status_code}: {r.text[:200]}")
         jobs.append((tag, r.json()["id"]))
         print(f"[{tag}] queued {r.json()['id']}")

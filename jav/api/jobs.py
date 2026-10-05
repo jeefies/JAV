@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from .. import capabilities, config, providers
 from ..models import BatchSpec, JobSubmit
@@ -42,11 +42,20 @@ def _public(ctx, job: dict, outs: list[dict] | None = None,
 
 
 def _public_output(job_id: str, o: dict) -> dict:
+    meta = o.get("asset_meta") or {}
     out = {"id": o["id"], "kind": o["kind"], "asset_id": o["asset_id"], "role": o["role"],
            "url": f"/v1/jobs/{job_id}/output?asset_id={o['id']}"}
-    dur = (o.get("asset_meta") or {}).get("duration_s")
+    if o.get("asset_sha256"):
+        out["sha256"] = o["asset_sha256"]
+    if o.get("asset_size") is not None:
+        out["size_bytes"] = o["asset_size"]
+    dur = meta.get("duration_s")
     if dur is not None:
         out["duration_s"] = dur
+    # 回执注明实际推理模式/表演参数/声学指标（wants.md §3/§7）：worker meta
+    # 全量透出；provider 私有字段本就只含 audio 需要的内容。
+    if o["kind"] == "audio" and meta:
+        out["meta"] = meta
     return out
 
 
@@ -102,6 +111,13 @@ def _enqueue(ctx, req: JobSubmit, pr: _Prepared, batch_id: str | None = None) ->
 @router.post("/jobs", status_code=201)
 async def create_job(req: JobSubmit, request: Request):
     ctx = request.app.ctx
+    # wants.md §6 幂等：client_ref 是客户端请求编号；重复提交同一 ref 返回既有
+    # job（不重复生成/计费），响应丢失后可凭 ref 复查是否已创建。
+    if req.client_ref:
+        existing = ctx.store.get_job_by_client_ref(req.client_ref)
+        if existing:
+            return JSONResponse(status_code=200,
+                                content={**_public(ctx, existing), "idempotent_replay": True})
     if ctx.store.queued_count() >= config.QUEUE_DEPTH_LIMIT:
         raise HTTPException(429, detail="queue depth limit reached")
     pr = _prepare(ctx, req)
@@ -115,6 +131,13 @@ async def create_batch(req: BatchSpec, request: Request):
     ctx = request.app.ctx
     if not req.jobs:
         raise HTTPException(400, detail="empty batch")
+    # 批量幂等（wants.md §6）：同一请求编号的 batch 重复提交返回既有批次。
+    if req.client_ref:
+        existing = ctx.store.get_batch_by_client_ref(req.client_ref)
+        if existing:
+            return JSONResponse(status_code=200, content={
+                "batch_id": existing["id"], "jobs": existing["jobs"],
+                "counts": existing["counts"], "idempotent_replay": True})
     if len(req.jobs) > config.BATCH_MAX_JOBS:
         raise HTTPException(400, detail=f"batch exceeds {config.BATCH_MAX_JOBS} jobs")
     if ctx.store.queued_count() + len(req.jobs) > config.QUEUE_DEPTH_LIMIT:
@@ -141,13 +164,14 @@ async def create_batch(req: BatchSpec, request: Request):
 @router.get("/jobs")
 async def list_jobs(request: Request, status: str | None = None,
                     runtime_profile: str | None = None, batch_id: str | None = None,
-                    provider: str | None = None, limit: int = 100, offset: int = 0):
+                    provider: str | None = None, client_ref: str | None = None,
+                    limit: int = 100, offset: int = 0):
     ctx = request.app.ctx
     limit = max(1, min(int(limit), 500))
     offset = max(0, int(offset))
     res = ctx.store.list_jobs(status=status, runtime_profile=runtime_profile,
                               batch_id=batch_id, provider=provider,
-                              limit=limit, offset=offset)
+                              client_ref=client_ref, limit=limit, offset=offset)
     ids = [j["id"] for j in res["jobs"]]
     outs_map = ctx.store.outputs_for(ids)
     qpos_map = ctx.store.queue_positions_for(ids)

@@ -14,9 +14,14 @@ DEFAULTS = {
     "seed": 42,           # 确定性默认：同参数重放命中缓存（§7 复用）
     "sample_rate": 48000,
 }
+# wants.md §3：不支持的参数必须明确报错，不能接受后忽略——输入/生成字段
+# 都走白名单校验，未知 key 直接 400。
+KNOWN_INPUTS = {"text", "voice_id", "instruction", "reference_audio",
+                "reference_text", "text_frontend", "duration_limit_s"}
 SAMPLE_RATES = (16000, 22050, 24000, 32000, 44100, 48000)
 INSTRUCT_PREFIX = "You are a helpful assistant. "
 END_PROMPT = "<|endofprompt|>"
+INSTRUCT_MAX = 500
 
 
 def wrap_instruct(instruction: str) -> str:
@@ -29,13 +34,23 @@ def wrap_instruct(instruction: str) -> str:
 def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
     if workflow != "t2a":
         raise ValueError(f"cosyvoice: unknown workflow {workflow}")
+    # wants.md §3: reject, never silently drop, unrecognized knobs.
+    unknown_in = set(inputs) - KNOWN_INPUTS
+    if unknown_in:
+        raise ValueError(f"cosyvoice.t2a: unsupported input(s) {sorted(unknown_in)}; "
+                         f"allowed: {sorted(KNOWN_INPUTS)}")
+    unknown_gen = set(generation) - set(DEFAULTS)
+    if unknown_gen:
+        raise ValueError(f"cosyvoice.t2a: unsupported generation key(s) "
+                         f"{sorted(unknown_gen)}; allowed: {sorted(DEFAULTS)}")
+
     text = str(inputs.get("text", "")).strip()
     if not text:
         raise ValueError("cosyvoice.t2a: 'text' is required")
     if len(text) > 5000:
         raise ValueError("cosyvoice.t2a: 'text' too long (>5000 chars); split it")
 
-    gen = {**DEFAULTS, **{k: v for k, v in generation.items() if k in DEFAULTS}}
+    gen = {**DEFAULTS, **generation}
     gen["speed"] = float(gen["speed"])
     if not 0.5 <= gen["speed"] <= 2.0:
         raise ValueError("cosyvoice.t2a: speed must be in [0.5, 2.0]")
@@ -43,6 +58,12 @@ def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
     gen["sample_rate"] = int(gen["sample_rate"])
     if gen["sample_rate"] not in SAMPLE_RATES:
         raise ValueError(f"cosyvoice.t2a: sample_rate must be one of {SAMPLE_RATES}")
+
+    dls = inputs.get("duration_limit_s")
+    if dls is not None:
+        dls = float(dls)
+        if dls <= 0:
+            raise ValueError("cosyvoice.t2a: duration_limit_s must be > 0 seconds")
 
     ref_asset = inputs.get("reference_audio")
     ref_text = str(inputs.get("reference_text", "")).strip()
@@ -70,6 +91,8 @@ def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
             prompt_path = v["path"]
 
     instruction = str(inputs.get("instruction", "")).strip()
+    if len(instruction) > INSTRUCT_MAX:
+        raise ValueError(f"cosyvoice.t2a: instruction too long (>{INSTRUCT_MAX}); keep it a short style phrase")
     instruct_text = wrap_instruct(instruction) if instruction else None
     # wetext 文本前端默认开（本机 FST 已缓存）；显式 false 时数字/缩写按原文
     # 送模型（CV3 自带文本归一化）
@@ -78,8 +101,10 @@ def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
     return {
         "provider": "cosyvoice", "workflow": "t2a",
         "text": text, "instruct_text": instruct_text,
+        "instruction": instruction,   # 原样回显（回执 §3：实际表演参数）
         "voice_id": voice_id, "prompt_text": prompt_text,
         "prompt_path": prompt_path, "text_frontend": text_frontend,
+        "duration_limit_s": dls,
         "generation": gen, "assets": assets,
     }
 
@@ -112,11 +137,13 @@ def compile(payload: dict, asset_paths: dict[str, str], output_dir, base_dir) ->
         "mode": "t2a",
         "text": payload["text"],
         "instruct_text": payload["instruct_text"],
+        "instruction": payload.get("instruction", ""),
         "voice_id": payload["voice_id"],
         "prompt_text": payload["prompt_text"],
         "prompt_wav": prompt_wav,
         "speed": gen["speed"], "seed": int(gen["seed"]),
         "sample_rate": gen["sample_rate"],
         "text_frontend": payload["text_frontend"],
+        "duration_limit_s": payload.get("duration_limit_s"),
         "output_dir": str(output_dir),
     }

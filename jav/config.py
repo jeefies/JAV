@@ -28,6 +28,12 @@ COSYVOICE_REPO_DIR = Path(os.getenv("COSYVOICE_REPO_DIR", "/mnt/data/AV/CosyVoic
 COSYVOICE_WEIGHTS_DIR = Path(os.getenv("COSYVOICE_WEIGHTS_DIR",
                                       "/mnt/data/AV/models/Fun-CosyVoice3-0.5B"))
 COSYVOICE_PYTHON_BIN = os.getenv("COSYVOICE_PYTHON_BIN", "/mnt/data/AV/venvs/cosyvoice/bin/python")
+# Model identity surfaced to clients (wants.md §5): name + weights source +
+# native sampling rate. 0.5B autoregressive TTS runs at 24 kHz internally;
+# the worker resamples to the caller's requested sample_rate.
+COSYVOICE_MODEL_NAME = "Fun-CosyVoice3-0.5B"
+COSYVOICE_MODEL_REPO = "FunAudioLLM/Fun-CosyVoice3-0.5B-2512 (modelscope)"
+COSYVOICE_NATIVE_SR = 24000
 # Unified env (2026-09-30): JAV server + ZIT worker + ComfyUI backend all run
 # on /home/jeefy/miniconda3/envs/comfyui (py3.11, torch 2.11+cu130,
 # diffusers git@50e7158, fastapi stack). Legacy openclaw-home image env retired.

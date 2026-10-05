@@ -91,6 +91,15 @@
   instruct2（无 spk 捷径）；无 instruction → add_zero_shot_spk 注册后的快速路径。
   勿"优化"成统一走 spk 注册。spk2info.pt 是只读快照（模型目录不回写），
   音色真相在 `config/voices.yaml`，worker 进程启动后按任务懒注册。
+  VoiceCache 的缓存键含参考文件 (mtime,size)+逐字稿：`POST /v1/voices replace=true`
+  换素材后 worker 不死也会自动重提特征，勿改回"按 voice_id 一次性注册"（陈旧 embedding）。
+- **音色管理语义（wants.md v2，2026-10-05）**：重复注册默认 **409**，显式 `replace:true`
+  才覆盖（旧版进 history，version+1，保留 20 版）；`kind/license/provenance/role/tags`
+  为来源/许可元数据；`model` 不符部署名 422。试听端点正名 `/preview`（`/sample` 是
+  兼容别名）。t2a inputs/generation **白名单**：未知键 400（"不支持的参数明确报错，
+  不能接受后忽略"）。`client_ref` 是幂等请求编号：POST /v1/jobs(/batch) 同 ref 重放
+  既有任务/批次（200 + idempotent_replay），tools/cosyvoice_smoke.py 每 case 用
+  独立 ref，重跑会命中重放（200 也是成功）。
 - cosyvoice 实测：加载 17s，VRAM 峰值 3.9G / RSS 7.3G（budget 6144/12288 有余量，
   仍属小档）；RTF 0.2–0.7。t2a 默认 seed=42（确定性 → §7 缓存复用）；输出 24k
   模型采样率 → 重采样到 `generation.sample_rate`（默认 48k）mono PCM16。

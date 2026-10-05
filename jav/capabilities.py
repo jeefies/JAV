@@ -160,7 +160,44 @@ def _capabilities_compute() -> dict:
                 else:
                     entry["available"] = True
             out[provider]["workflows"][wf] = entry
+    if "cosyvoice" in out:
+        out["cosyvoice"]["model"] = _cosyvoice_model_info()
     return out
+
+
+def _cosyvoice_weights_fingerprint() -> str | None:
+    """llm.pt sha from the registered weights manifest (audit_weights output)."""
+    try:
+        data = json.loads((Path(config.DATA_DIR) / "weights.json").read_text())
+        key = str(config.COSYVOICE_WEIGHTS_DIR / "llm.pt")
+        return (data.get(key) or {}).get("sha256", "")[:12] or None
+    except Exception:
+        return None
+
+
+def _cosyvoice_model_info() -> dict:
+    import subprocess
+    try:
+        code_rev = subprocess.run(
+            ["git", "-C", str(config.COSYVOICE_REPO_DIR), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5).stdout.strip() or None
+    except Exception:
+        code_rev = None
+    return {
+        "name": config.COSYVOICE_MODEL_NAME,
+        "weights": config.COSYVOICE_MODEL_REPO,
+        "weights_fingerprint": _cosyvoice_weights_fingerprint(),
+        "code_revision": code_rev,
+        "native_sample_rate": config.COSYVOICE_NATIVE_SR,
+        "voice_cloning": "zero-shot (10-15 s reference take + verbatim transcript)",
+        "features": {
+            "instruction": True,       # inference_instruct2, per-sentence delivery control
+            "pinyin_hotfix": True,     # [j][ǐ] inline polyphone marks pass through verbatim
+            "text_frontend": True,     # wetext normalizes numbers/abbreviations
+            "mono_lossless_wav": True,
+        },
+        "voice_kinds": ["local", "community", "cloud"],
+    }
 
 
 def is_available(provider: str, workflow: str) -> tuple[bool, str]:

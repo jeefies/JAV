@@ -50,6 +50,10 @@ def _age_s(iso_ts: str) -> float:
 RETRYABLE_ERRORS = {"runtime_crash", "timeout", "start_error",
                     "internal_error", "ingest_error", "oom_error"}
 
+# GPU 被其他家族占用时，这些 profile 的排队任务改走 CPU 兜底通道并行出片。
+# （值 = profile.name，其 Profile.gpu 必须为 False；supervisor.ensure 按此路由。）
+CPU_FALLBACK_ROUTES = {"cosyvoice": "cosyvoice-cpu"}
+
 
 class Scheduler:
     def __init__(self, store, supervisor, bus: EventBus | None = None,
@@ -64,14 +68,18 @@ class Scheduler:
         self._backoff: dict[str, float] = {}
         self._backoff_attempts: dict[str, int] = {}
         self._wake = asyncio.Event()
+        self._wake_cpu = asyncio.Event()
         self._task: asyncio.Task | None = None
+        self._cpu_task: asyncio.Task | None = None
         self.stopped = asyncio.Event()
 
     def wake(self):
         self._wake.set()
+        self._wake_cpu.set()
 
     async def start(self):
         self._task = asyncio.create_task(self._loop(), name="jav-scheduler")
+        self._cpu_task = asyncio.create_task(self._cpu_loop(), name="jav-scheduler-cpu")
 
     async def _loop(self):
         while not self.stopped.is_set():
@@ -88,17 +96,66 @@ class Scheduler:
             except Exception as e:  # scheduler must never die
                 self.store.log_event(None, None, f"scheduler_error: {e}", ok=False)
             await self.sup.stop_if_idle()
-        if self.sup.backend:
-            await self.sup.shutdown("exit")
+        if self.sup.backend or self.sup.cpu_backend:
+            await self.sup.shutdown("exit", lane="both")
 
     async def stop(self):
         self.stopped.set()
         self.wake()
-        if self._task:
+        for t in (self._task, self._cpu_task):
+            if t:
+                try:
+                    await asyncio.wait_for(t, timeout=90)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    t.cancel()
+
+    async def _cpu_loop(self):
+        """GPU 被占用时把 cosyvoice 排队任务引到 CPU 通道，与渲染并行。"""
+        while not self.stopped.is_set():
             try:
-                await asyncio.wait_for(self._task, timeout=90)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                self._task.cancel()
+                await asyncio.wait_for(self._wake_cpu.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                pass
+            self._wake_cpu.clear()
+            try:
+                progressed = await self.process_cpu_once()
+            except Exception as e:  # the fallback lane must never kill the loop
+                self.store.log_event(None, None, f"cpu_scheduler_error: {e}", ok=False)
+                progressed = False
+            await self.sup.stop_if_idle(lane="cpu")
+            if not progressed:
+                await asyncio.sleep(0)
+
+    def _cpu_target(self) -> dict | None:
+        """路由条件：GPU 通道**当下接不了**该家族任务——被别的家族占用，或该
+        profile 正准入退避——且队列里有它；GPU 空闲或已亲自跑着 cosyvoice 时
+        保持安静（快通道优先，也避免双 worker 双倍吃 RAM）。"""
+        now_ts = time.monotonic()
+        active = self.sup.active_profile
+        for src, cpu_profile in CPU_FALLBACK_ROUTES.items():
+            if self._backoff.get(cpu_profile, 0) > now_ts:
+                continue
+            if active is None and self._backoff.get(src, 0) <= now_ts:
+                continue  # GPU 空转：主循环会立刻认领队首，轮不到兜底通道
+            if active == src:
+                continue  # GPU 正在跑同一家族：worker 已在，直接排队最快
+            queued = [j for j in self._queued_sorted() if j["runtime_profile"] == src]
+            if queued:
+                return queued[0]
+        return None
+
+    async def process_cpu_once(self) -> bool:
+        job = self._cpu_target()
+        if job is None:
+            return False
+        claimed = self.store.claim_next(job["runtime_profile"])
+        if claimed is None or claimed["id"] != job["id"]:
+            if claimed:
+                self.store.set_status(claimed["id"], "queued")
+                self.wake()
+            return bool(claimed)
+        await self.run_job(claimed, lane="cpu")
+        return True
 
     # ---------- selection ----------
     def _queued_sorted(self) -> list[dict]:
@@ -141,10 +198,14 @@ class Scheduler:
         await self.run_job(claimed)
         return True
 
-    async def run_job(self, job: dict):
+    async def run_job(self, job: dict, lane: str = "gpu"):
         payload = job["payload"]
         payload["job_id"] = job["id"]
         profile_name = job["runtime_profile"]
+        # CPU 兜底通道换用执行 profile（任务记录里的 runtime_profile 不变，
+        # API 契约稳定；实际设备在输出 meta.device 里如实回执）
+        exec_profile = (CPU_FALLBACK_ROUTES.get(profile_name, profile_name)
+                        if lane == "cpu" else profile_name)
         if self.store.cancel_requested(job["id"]):
             self._finish(job["id"], "cancelled", error="cancelled by user")
             return
@@ -164,23 +225,24 @@ class Scheduler:
             return
 
         try:
-            backend = await self.sup.ensure(profile_name)
+            backend = await self.sup.ensure(exec_profile)
         except AdmissionDenied as e:
-            self._backoff[profile_name] = time.monotonic() + self._next_backoff(profile_name)
+            self._backoff[exec_profile] = time.monotonic() + self._next_backoff(exec_profile)
             self.store.set_status(job["id"], "queued")
-            self.store.log_event(self.sup.active_profile, profile_name,
+            self.store.log_event(exec_profile, exec_profile,
                                  f"admission_denied: {e}", ok=False)
             return
         except BackendCrash as e:
             await self._fail_or_retry(job, f"runtime_start_failed: {e}", "start_error")
             return
 
-        if self.last_profile != profile_name:
-            self.streak = 0
-            self.last_profile = profile_name
-        self.streak += 1
-        self._backoff.pop(profile_name, None)
-        self._backoff_attempts.pop(profile_name, None)
+        if lane == "gpu":
+            if self.last_profile != profile_name:
+                self.streak = 0
+                self.last_profile = profile_name
+            self.streak += 1
+        self._backoff.pop(exec_profile, None)
+        self._backoff_attempts.pop(exec_profile, None)
 
         if self.store.cancel_requested(job["id"]):
             self._finish(job["id"], "cancelled", error="cancelled by user")
@@ -188,25 +250,27 @@ class Scheduler:
 
         self.store.set_status(job["id"], "running")
         self.bus.publish(job["id"], {"status": "running"})
-        timeout = self.sup.profiles[profile_name].job_timeout_s
+        timeout = self.sup.profiles[exec_profile].job_timeout_s
         try:
             result = await asyncio.wait_for(backend.submit(job["id"], task), timeout=timeout)
         except asyncio.TimeoutError:
             await backend.cancel(job["id"])
-            await self.sup.shutdown("job_timeout")  # never reuse a hung worker
+            # never reuse a hung worker (lane-targeted: a CPU worker must not
+            # tear down the GPU runtime and vice versa)
+            await self.sup.shutdown("job_timeout", lane=lane)
             await self._fail_or_retry(job, f"job timeout after {timeout}s", "timeout")
-            self.sup.job_finished()
+            self.sup.job_finished(lane=lane)
             return
         except BackendCrash as e:
             await self._fail_or_retry(job, str(e), "runtime_crash")
-            self.sup.job_finished()
+            self.sup.job_finished(lane=lane)
             return
         except Exception as e:  # defensive: unknown backend failure
             await self._fail_or_retry(job, f"unexpected: {e}", "internal_error")
-            self.sup.job_finished()
+            self.sup.job_finished(lane=lane)
             return
 
-        self.sup.job_finished()
+        self.sup.job_finished(lane=lane)
         if result.get("cancel_requested") or self.store.cancel_requested(job["id"]):
             for p in result.get("paths", []):
                 if self._contained(p):
@@ -224,7 +288,7 @@ class Scheduler:
             self._finish(job["id"], "completed")
         else:
             if result.get("error_type") == "oom_error":
-                await self.sup.shutdown("oom")
+                await self.sup.shutdown("oom", lane=lane)
             await self._fail_or_retry(job, result.get("error", "generation failed"),
                                       result.get("error_type", "generation_error"))
 
@@ -301,6 +365,8 @@ class Scheduler:
         return {
             "active_profile": self.sup.active_profile,
             "state": self.sup.state,
+            "cpu_active_profile": self.sup.cpu_active_profile,
+            "cpu_state": self.sup.cpu_state,
             "streak": self.streak,
             "queued_by_profile": dict(self.store.queued_profiles()),
             "queued_total": self.store.queued_count(),

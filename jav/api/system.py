@@ -25,16 +25,18 @@ async def get_runtime(request: Request):
     ctx = request.app.ctx
     sup = ctx.sup
     backend = sup.backend
-    rss_mb = None
-    if backend and backend.pid:
+
+    def _rss(pid):
         try:
-            with open(f"/proc/{backend.pid}/status") as fh:
+            with open(f"/proc/{pid}/status") as fh:
                 for line in fh:
                     if line.startswith("VmRSS"):
-                        rss_mb = int(line.split()[1]) // 1024
-                        break
+                        return int(line.split()[1]) // 1024
         except OSError:
             pass
+        return None
+
+    rss_mb = _rss(backend.pid) if backend and backend.pid else None
     kb = {}
     with open("/proc/meminfo") as fh:
         for line in fh:
@@ -43,9 +45,15 @@ async def get_runtime(request: Request):
     # nvidia-smi subprocess can take 100ms-10s under driver contention; never
     # run it inline on the event loop (supervisor moves these probes off-loop).
     vram_by_pid = await asyncio.to_thread(vram_pids) if backend and backend.pid else None
+    cpu_b = sup.cpu_backend
+    cpu_rss_mb = _rss(cpu_b.pid) if cpu_b and cpu_b.pid else None
     return {
         "active_profile": sup.active_profile,
         "state": sup.state,
+        "cpu_active_profile": sup.cpu_active_profile,
+        "cpu_state": sup.cpu_state,
+        "cpu_pid": cpu_b.pid if cpu_b else None,
+        "cpu_rss_mb": cpu_rss_mb,
         "pid": backend.pid if backend else None,
         "rss_mb": rss_mb,
         "mem": {"ram_available_mb": kb.get("MemAvailable", 0),
@@ -91,8 +99,8 @@ async def unload_runtime(request: Request):
     busy = ctx.store.list_jobs(status="starting_runtime,running", limit=1)["total"]
     if busy:
         raise HTTPException(409, detail=f"{busy} job(s) in flight; cancel them first")
-    prev = ctx.sup.active_profile
-    await ctx.sup.shutdown("manual_unload")
+    prev = ctx.sup.active_profile or ctx.sup.cpu_active_profile
+    await ctx.sup.shutdown("manual_unload", lane="both")
     ctx.store.log_event(prev, None, "manual_unload")
     ctx.sched.wake()
     return {"unloaded": prev, **ctx.sched.snapshot()}

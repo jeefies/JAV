@@ -10,6 +10,14 @@
 1. **同一时刻最多一个 runtime 进程占用 GPU 大权重**。RuntimeSupervisor 的
    asyncio.Lock 是唯一入口；不要绕过它 spawn 任何推理进程。
    `tools/first_validation.py` 与在线服务互斥（health 探测 + lockfile），不要绕过。
+   **例外（2026-10-06）：CPU 兜底通道**。`Profile.gpu=False` 的 profile
+   （`cosyvoice-cpu`）走 supervisor 内部第二槽位（`_cpu_lock`/`cpu_backend`），
+   与 GPU 通道**并行**；它必须完全不占 NVIDIA 显存、跳过 VRAM 门、仍过 RAM
+   准入，且所有 spawn 依旧经 supervisor——"绕过锁直接 spawn"仍然被禁止。
+   worker 回调带 `lane` 标签（cosyvoice_worker 的 CV_LANE，supervisor._route
+   路由），runtime.state 按 lane 分文件（`runtime.state` / `runtime.state.cpu`）。
+   GPU 空闲时主循环仍走 GPU 快通道（_cpu_target 只在 GPU 被其他家族占用或
+   cosyvoice 准入退避时接管），勿改成"总是先抢 CPU"。
 2. **绝不中途杀死 running 任务来切换 runtime**（用户显式 cancel 除外）。
    取消是持久化 `cancel_requested` 标志 + 调度器检查点落定，勿改回内存态。
 3. **RAM 准入**：启动任何 backend 前必须过 `check_admission`
@@ -101,7 +109,11 @@
   既有任务/批次（200 + idempotent_replay），tools/cosyvoice_smoke.py 每 case 用
   独立 ref，重跑会命中重放（200 也是成功）。
 - cosyvoice 实测：加载 17s，VRAM 峰值 3.9G / RSS 7.3G（budget 6144/12288 有余量，
-  仍属小档）；RTF 0.2–0.7。t2a 默认 seed=42（确定性 → §7 缓存复用）；输出 24k
+  仍属小档）；RTF 0.2–0.7。**CPU 兜底通道实测（2026-10-06，MH3 批量并发下）**：
+  加载 10s、8 线程峰值 RSS 8.7G、RTF≈2.0（instruct2 与 zero_shot 相当）→
+  profile 预算 ram 10240 / idle_unload 120s。注意 CPU/GPU 同 seed 数值结果
+  本就不同，任务回执 meta.device 如实记录执行设备；runtime_profile 契约不变
+  （仍显示 "cosyvoice"，路由是实现细节）。t2a 默认 seed=42（确定性 → §7 缓存复用）；输出 24k
   模型采样率 → 重采样到 `generation.sample_rate`（默认 48k）mono PCM16。
   wetext FST 自动缓存于 ~/.cache/modelscope/hub/pengzhendong（只含 .fst，不触发
   audit_weights 红线；缺失时官方降级为无前端，CV3 自带文本归一化，无碍）。

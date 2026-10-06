@@ -52,6 +52,8 @@ PIPELINE_STATUS_URL = os.getenv(
 CALLBACK_SECRET = os.getenv("JAV_CALLBACK_SECRET", "")
 CALLBACK_HEADERS = {"X-JAV-Callback": CALLBACK_SECRET} if CALLBACK_SECRET else {}
 IDLE_TIMEOUT = int(os.getenv("CV_WORKER_IDLE_TIMEOUT", "1800"))
+# 执行通道标签：supervisor 用它把回调路由回正确的 lane worker（GPU 通道不设此变量）
+LANE = os.getenv("CV_LANE", "gpu")
 
 INSTRUCT_SYSTEM = "You are a helpful assistant.<|endofprompt|>"
 
@@ -62,6 +64,7 @@ logger = logging.getLogger("cosyvoice_worker")
 
 
 def send_callback(result):
+    result.setdefault("lane", LANE)
     try:
         requests.post(CALLBACK_URL, json=result, headers=CALLBACK_HEADERS, timeout=10)
     except Exception as e:
@@ -71,7 +74,8 @@ def send_callback(result):
 def send_status(status, **extra):
     try:
         requests.post(PIPELINE_STATUS_URL,
-                      json={"status": status, "timestamp": datetime.now().isoformat(), **extra},
+                      json={"status": status, "lane": LANE,
+                            "timestamp": datetime.now().isoformat(), **extra},
                       headers=CALLBACK_HEADERS, timeout=5)
     except Exception as e:
         logger.warning(f"status notify failed: {e}")
@@ -194,6 +198,7 @@ def run_task(cosy: AutoModel, voices: VoiceCache, task: dict) -> tuple[str, dict
         "channels": int(wav.shape[0]),
         "voice_id": voice_id,
         "mode": "instruct2" if instruct else "zero_shot",
+        "device": "cpu" if LANE == "cpu" else "cuda",
         "seed_used": seed,
         "instruction": task.get("instruction") or None,
         "speed": speed,
@@ -215,7 +220,7 @@ def main():
     except Exception:
         pass
 
-    logger.info(f"loading CosyVoice3 from {MODEL_DIR} (repo {REPO_DIR})")
+    logger.info(f"loading CosyVoice3 from {MODEL_DIR} (repo {REPO_DIR}) lane={LANE}")
     try:
         cosy = AutoModel(model_dir=MODEL_DIR)
         voices = VoiceCache(cosy)

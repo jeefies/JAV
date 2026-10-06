@@ -45,7 +45,7 @@ def create_app(profiles: dict | None = None, store: Store | None = None,
             yield
         finally:
             await sched.stop()
-            await sup.shutdown("exit")
+            await sup.shutdown("exit", lane="both")
 
     app = FastAPI(title="JAV — Jeefy Audio-Video Generation Platform",
                   version="0.1.0", lifespan=lifespan)

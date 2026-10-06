@@ -62,6 +62,12 @@ def cache_hash(data: dict) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+
+def _runtime_state_path(lane: str = "gpu"):
+    # GPU lane keeps the historical file name; extra lanes get suffixed copies.
+    return (config.DATA_DIR / "runtime.state" if lane == "gpu"
+            else config.DATA_DIR / f"runtime.state.{lane}")
+
 class Store:
     def __init__(self, db_path: Path | str | None = None):
         self.db_path = str(db_path or config.DB_PATH)
@@ -405,21 +411,23 @@ class Store:
             "SELECT * FROM runtime_events ORDER BY id DESC LIMIT ?", (limit,))
 
     # ---------- runtime state persistence (crash sweep) ----------
-    def save_runtime_state(self, pid: int, profile: str, start_time: int | None = None):
-        (config.DATA_DIR / "runtime.state").write_text(json.dumps(
+    def save_runtime_state(self, pid: int, profile: str, start_time: int | None = None,
+                           lane: str = "gpu"):
+        path = _runtime_state_path(lane)
+        path.write_text(json.dumps(
             {"pid": pid, "profile": profile, "start_time": start_time, "ts": now()}))
 
-    def load_runtime_state(self) -> dict | None:
-        p = config.DATA_DIR / "runtime.state"
-        if not p.exists():
+    def load_runtime_state(self, lane: str = "gpu") -> dict | None:
+        path = _runtime_state_path(lane)
+        if not path.exists():
             return None
         try:
-            return json.loads(p.read_text())
+            return json.loads(path.read_text())
         except Exception:
             return None
 
-    def clear_runtime_state(self):
+    def clear_runtime_state(self, lane: str = "gpu"):
         try:
-            (config.DATA_DIR / "runtime.state").unlink()
+            _runtime_state_path(lane).unlink()
         except FileNotFoundError:
             pass

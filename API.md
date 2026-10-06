@@ -87,7 +87,8 @@
     instruction ≤500 字符
   - 输出 outputs[] 带 `duration_s` + `sha256` + `size_bytes` + `meta`（回执：实际
     `mode` zero_shot/instruct2、`instruction` 原文、`seed_used`、`speed`、`text_frontend`、
-    `sample_rate`、`peak_dbfs`、`rms_dbfs`、`clipped_samples`，见 worker `_audio_metrics`）
+    `sample_rate`、`peak_dbfs`、`rms_dbfs`、`clipped_samples`、`device`
+    （cuda=GPU 快通道 / cpu=兜底通道），见 worker `_audio_metrics`）
   - 多音字：`text` 内联拼音标记（`[j][ǐ]` 官方 hotfix 语法）直接透传
 
 ## 任务
@@ -196,7 +197,8 @@
 - `GET /v1/capabilities` 的 cosyvoice 组附 `model` 块（名称/权重 sha 指纹/code_revision/
   native_sample_rate/features/voice_kinds，见 capabilities.py `_cosyvoice_model_info`）
 - `GET /v1/queue` — `{active_profile, state, streak, queued_by_profile,
-  queued_total, admission_backoff}`
+  queued_total, admission_backoff, cpu_active_profile, cpu_state}`
+  （`cpu_*` 为 CPU 兜底通道槽位，2026-10-06 增；无兜底任务时为 null/STOPPED）
 - `GET /v1/runtime` — 当前 runtime 进程/RAM/swap/VRAM 指标 + 最近切换事件
 - `POST /v1/runtime/keepalive` — 刷新空闲卸载计时器，让当前 runtime 继续驻留
   （可选 `?ttl_s=` 临时延长本轮窗口，钳制 1..7200s；非法/负值按 1s，不会反向
@@ -209,6 +211,12 @@
 - `GET /v1/health` — liveness
 
 ## 调度语义
+- **cosyvoice CPU 兜底通道（2026-10-06）**：GPU 被其他家族 runtime 占用（或
+  cosyvoice 正准入退避）时，排队中的 cosyvoice 任务自动改由 CPU worker 并行
+  执行（RTF≈2.0，加载仅 10s，峰值 RAM 8.7G），不阻塞、不等 GPU 空闲。GPU
+  空闲或正跑 cosyvoice 时该通道保持安静（快通道优先）。任务的
+  `runtime_profile` 契约不变（仍为 `cosyvoice`），实际执行设备回执在输出
+  `meta.device`。可用 `JAV_TTS_CPU_IDLE_UNLOAD_S` / `JAV_CV_CPU_THREADS` 调参。
 - 互斥：跨 profile 切换 = 软清理(`/free`) → SIGTERM → 显存释放确认 → 起新进程
 - affinity：同 profile 连跑 ≤3 个任务；其他 profile 等待 >10min 触发切换；
   绝不在任务中途切换 runtime

@@ -34,6 +34,8 @@ COSYVOICE_PYTHON_BIN = os.getenv("COSYVOICE_PYTHON_BIN", "/mnt/data/AV/venvs/cos
 COSYVOICE_MODEL_NAME = "Fun-CosyVoice3-0.5B"
 COSYVOICE_MODEL_REPO = "FunAudioLLM/Fun-CosyVoice3-0.5B-2512 (modelscope)"
 COSYVOICE_NATIVE_SR = 24000
+# CPU 兜底通道的 torch 线程上限（20 线程宿主留余量给 GPU runtime 与服务本体）
+COSYVOICE_CPU_THREADS = int(os.getenv("JAV_CV_CPU_THREADS", "8"))
 # Unified env (2026-09-30): JAV server + ZIT worker + ComfyUI backend all run
 # on /home/jeefy/miniconda3/envs/comfyui (py3.11, torch 2.11+cu130,
 # diffusers git@50e7158, fastapi stack). Legacy openclaw-home image env retired.
@@ -85,6 +87,7 @@ class Profile:
     required_nodes: tuple[str, ...] = ()
     extra_args: tuple[str, ...] = ()
     enabled: bool = True              # operator kill-switch
+    gpu: bool = True                  # False = CPU 通道：不受 GPU 互斥锁管辖
 
     @staticmethod
     def from_dict(d: dict, base: "Profile | None" = None) -> "Profile":
@@ -110,6 +113,7 @@ class Profile:
         for k in ("required_nodes", "extra_args"):
             vals[k] = tuple(vals[k])
         vals["enabled"] = bool(vals["enabled"])
+        vals["gpu"] = bool(vals["gpu"])
         if not vals["name"] or not vals["backend"]:
             raise ValueError("profile requires name and backend")
         return Profile(**vals)
@@ -158,6 +162,18 @@ def default_profiles() -> dict[str, Profile]:
             ram_budget_mb=12288, vram_budget_mb=6144,
             start_timeout_s=300, job_timeout_s=600,
             idle_unload_s=int(os.getenv("JAV_TTS_IDLE_UNLOAD_S", "300")),
+            python_bin=COSYVOICE_PYTHON_BIN,
+            script=str(BASE_DIR / "jav" / "runtime" / "cosyvoice_worker.py"),
+        ),
+        "cosyvoice-cpu": Profile(
+            name="cosyvoice-cpu", backend="cosyvoice_subprocess", gpu=False,
+            # CPU 兜底通道：GPU 被其他家族占用时 cosyvoice 任务在此并行出片。
+            # 预算=实测（2026-10-06 纯 CPU bench：8 线程峰值 RSS 8.7G，RTF≈2.0，
+            # 加载 10s；MH3 并发在跑的最坏窗口仍准入得进）。idle 120s 即拆，
+            # 把 RAM 快速还给 GPU 家族的准入。
+            ram_budget_mb=10240, vram_budget_mb=0,
+            start_timeout_s=180, job_timeout_s=1800,
+            idle_unload_s=int(os.getenv("JAV_TTS_CPU_IDLE_UNLOAD_S", "120")),
             python_bin=COSYVOICE_PYTHON_BIN,
             script=str(BASE_DIR / "jav" / "runtime" / "cosyvoice_worker.py"),
         ),

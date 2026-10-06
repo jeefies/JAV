@@ -21,8 +21,18 @@ class CosyVoiceBackend(SubprocessWorkerBackend):
             raise BackendCrash(f"cosyvoice interpreter missing: {config.COSYVOICE_PYTHON_BIN}")
 
     def env_vars(self) -> dict[str, str]:
-        return {
+        env = {
             "CV_REPO_DIR": str(config.COSYVOICE_REPO_DIR),
             "CV_MODEL_DIR": str(config.COSYVOICE_WEIGHTS_DIR),
             "CV_WORKER_IDLE_TIMEOUT": str(max(self.profile.idle_unload_s + 300, 1800)),
         }
+        if not self.profile.gpu:
+            # CPU 兜底通道：torch 必须看不到 CUDA（worker 在 import torch 前生效），
+            # 线程数显式限死，避免和 GPU runtime 的宿主侧负载抢全部核心。
+            env.update({
+                "CV_LANE": "cpu",
+                "CUDA_VISIBLE_DEVICES": "",
+                "OMP_NUM_THREADS": str(config.COSYVOICE_CPU_THREADS),
+                "MKL_NUM_THREADS": str(config.COSYVOICE_CPU_THREADS),
+            })
+        return env

@@ -34,7 +34,7 @@
 | provider.workflow | runtime_profile |
 |---|---|
 | zit.t2i / zit.i2i / zit.inpaint | zit |
-| ltx25.t2v / i2v / flf2v / a2v / union_control / motion_control / inpaint / outpaint / ic_lora / bbox_control | ltx25 |
+| ltx25.t2v / i2v / flf2v / a2v / ia2v / union_control / motion_control / inpaint / outpaint / ic_lora / bbox_control | ltx25 |
 | mh3.t2v / i2v / fl2v | mh3.fl2va |
 | mh3.ref2v / fun_control / multiframe | mh3.ref2va |
 | cosyvoice.t2a | cosyvoice |
@@ -47,6 +47,11 @@
   时长由 `generation.duration`（默认 5s）决定——音频被 trim 到该时长，
   **不会**自动跟随源音频长度；控制族中 `inpaint`/`outpaint`/`ic_lora` 允许
   空 prompt，`union_control`/`motion_control` 必须带 prompt
+- `ltx25.ia2v`（2026-10-06，首帧 + 配音双条件）：必须同时提供 `first_image`
+  （接受同上别名）与 `audio`；音频 latent 锁定（不重新生成声音），成片音轨 =
+  输入录音被 trim 到 `generation.duration` 后的素材——**建议录音长度与
+  duration 对齐**；`strength` 控制首帧锚定强度（默认 0.7）。目前仅 fast 单段
+  路径（`mode:"high"` 不报错但按 fast 执行，无 upscale 变体）
 - `mh3` 输入槽位：i2v/fl2v 真名为 `first_frame`，i2v 接受别名 `image`；
   `multiframe` 的 `reference_images`（1-9）为**必填**（ref2va base 图锚点）
 - **ltx25 IC-LoRA 控制族**（`union_control` / `motion_control` / `inpaint` /

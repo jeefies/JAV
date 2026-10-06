@@ -1,0 +1,20 @@
+{
+  "params": {
+    "prompt": {"node": "5.inputs.text"},
+    "negative_prompt": {"node": "6.inputs.text"},
+    "width": {"node": "8.inputs.width"},
+    "height": {"node": "8.inputs.height"},
+    "num_frames": {"node": "8.inputs.length"},
+    "fps": {"node": "7.inputs.frame_rate"},
+    "video_fps": {"node": "19.inputs.fps"},
+    "seed": {"node": "11.inputs.noise_seed"},
+    "cfg": {"node": "12.inputs.cfg"},
+    "strength": {"node": "23.inputs.strength"},
+    "trim_duration": {"node": "51.inputs.duration"}
+  },
+  "assets": {
+    "audio": {"node": "50.inputs.audio"},
+    "first_image": {"node": "21.inputs.image"}
+  },
+  "outputs": ["video"]
+}

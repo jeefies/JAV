@@ -13,7 +13,7 @@ import math
 from ..models import ProviderError, eff_seed
 from . import comfy_provider
 
-WORKFLOWS = ("t2v", "i2v", "flf2v", "a2v", "bbox_control",
+WORKFLOWS = ("t2v", "i2v", "flf2v", "a2v", "ia2v", "bbox_control",
              "union_control", "motion_control", "inpaint", "outpaint", "ic_lora")
 
 # IC-LoRA control workflows: media slots + allowed loras (+guide grid factor
@@ -140,6 +140,15 @@ def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
     if workflow == "a2v":
         if not inputs.get("audio"):
             raise ProviderError("ltx25.a2v: audio asset required")
+        assets["audio"] = inputs["audio"]
+    if workflow == "ia2v":
+        fi = (inputs.get("first_image") or inputs.get("first_frame")
+              or inputs.get("image"))  # docs aliases, same as i2v
+        if not fi:
+            raise ProviderError("ltx25.ia2v: first_image asset required")
+        if not inputs.get("audio"):
+            raise ProviderError("ltx25.ia2v: audio asset required")
+        assets["first_image"] = fi
         assets["audio"] = inputs["audio"]
     gen = {"width": 960, "height": 544, "duration": 5, "fps": 24, "cfg": 1.0,
            "strength": 0.7, "seed": int(generation.get("seed", -1))}

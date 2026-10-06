@@ -32,7 +32,7 @@ PROVIDER_WORKFLOWS: dict[str, dict[str, str]] = {
     "mh3": {"t2v": "mh3.fl2va", "i2v": "mh3.fl2va", "fl2v": "mh3.fl2va",
             "ref2v": "mh3.ref2va", "fun_control": "mh3.ref2va",
             "multiframe": "mh3.ref2va"},
-    "ltx25": {"t2v": "ltx25", "i2v": "ltx25", "flf2v": "ltx25", "a2v": "ltx25",
+    "ltx25": {"t2v": "ltx25", "i2v": "ltx25", "flf2v": "ltx25", "a2v": "ltx25", "ia2v": "ltx25",
               "bbox_control": "ltx25",
               "union_control": "ltx25", "motion_control": "ltx25",
               "inpaint": "ltx25", "outpaint": "ltx25", "ic_lora": "ltx25"},

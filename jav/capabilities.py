@@ -13,7 +13,7 @@ from .models import PROVIDER_WORKFLOWS
 
 # Workflows whose provider templates are implemented in code.
 IMPLEMENTED = {"zit.t2i", "zit.i2i", "zit.inpaint",
-               "ltx25.t2v", "ltx25.i2v", "ltx25.flf2v", "ltx25.a2v", "ltx25.bbox_control",
+               "ltx25.t2v", "ltx25.i2v", "ltx25.flf2v", "ltx25.a2v", "ltx25.ia2v", "ltx25.bbox_control",
                "ltx25.union_control", "ltx25.motion_control", "ltx25.inpaint",
                "ltx25.outpaint", "ltx25.ic_lora",
                "mh3.t2v", "mh3.i2v", "mh3.fl2v", "mh3.ref2v", "mh3.fun_control",

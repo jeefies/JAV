@@ -214,6 +214,11 @@
   返回卸载前 profile 与队列快照；**有 starting_runtime/running 任务时 409**
   （绝不中途打断在途任务；先 cancel）
 - `GET /v1/health` — liveness
+- `GET /v1/openapi.json` — **公开 OpenAPI 3.1 契约**（策划视图：剔除
+  `/v1/internal/*`、按资源打 tags、非 GET 标注 bearer；requestBody 类型来自
+  Pydantic 模型不会漂移，描述文本对齐本文档）。FastAPI 默认
+  `/openapi.json|/docs|/redoc` 已关闭，勿重新打开——未策划的 schema 会泄漏
+  internal 端点面。文档前端应据此端点动态渲染，而不是维护手写端点清单
 
 ## 调度语义
 - **cosyvoice CPU 兜底通道（2026-10-06）**：GPU 被其他家族 runtime 占用（或

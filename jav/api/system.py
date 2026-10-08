@@ -276,3 +276,10 @@ async def health(request: Request):
         "queued": ctx.store.queued_count(),
         "scheduler_running": not ctx.sched.stopped.is_set(),
     }
+
+
+@router.get("/openapi.json")
+async def openapi_json(request: Request):
+    """Public OpenAPI 3.1 contract (internal endpoints stripped, per-process cache)."""
+    from .. import openapi as openapi_mod
+    return JSONResponse(openapi_mod.cached_spec(request.app))

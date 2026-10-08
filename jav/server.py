@@ -48,7 +48,10 @@ def create_app(profiles: dict | None = None, store: Store | None = None,
             await sup.shutdown("exit", lane="both")
 
     app = FastAPI(title="JAV — Jeefy Audio-Video Generation Platform",
-                  version="0.1.0", lifespan=lifespan)
+                  version="0.1.0", lifespan=lifespan,
+                  docs_url=None, redoc_url=None, openapi_url=None)
+    # 默认 /openapi.json|/docs|/redoc 关闭（未策划的 schema 会暴露 internal 端点）；
+    # 公开契约只走 GET /v1/openapi.json（jav.openapi 策划视图）。
     app.ctx = Ctx(store=store, sup=sup, sched=sched, bus=bus)
     if config.API_TOKEN:
         @app.middleware("http")

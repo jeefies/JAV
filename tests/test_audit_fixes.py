@@ -70,6 +70,20 @@ class TestGraphContract:
         assert t["graph"]["900"]["inputs"]["lora_name"].startswith(
             "minimax_h3_ref2v_turbo_4step")
 
+    def test_mh3_default_steps_is_base_quality(self):
+        # 2026-10-09 regression: base int8 must never default to turbo-step counts
+        p = mh3.normalize("t2v", {"prompt": "x"}, {})
+        assert p["generation"]["steps"] == 20
+        p = mh3.normalize("ref2v", {"prompt": "x", "reference_images": ["a"]}, {})
+        assert p["generation"]["steps"] == 20
+        p = mh3.normalize("ref2v", {"prompt": "x", "reference_images": ["a"], "turbo": True}, {})
+        assert p["generation"]["steps"] == 4          # turbo forces official schedule
+        p = mh3.normalize("fl2v", {"prompt": "x", "first_frame": "a", "last_frame": "b",
+                                   "turbo": True}, {})
+        assert p["generation"]["steps"] == 8
+        p = mh3.normalize("t2v", {"prompt": "x"}, {"steps": 30})
+        assert p["generation"]["steps"] == 30          # explicit wins
+
     def test_mh3_steps_validation(self):
         with pytest.raises(ProviderError):
             mh3.normalize("t2v", {"prompt": "x"}, {"steps": 0})

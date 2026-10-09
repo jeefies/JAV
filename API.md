@@ -69,7 +69,10 @@
     ingredients LoRA 图生视频）；`mode="v2v"`：`source_video` +
     `lora ∈ {cinemagraph, clean_plate, ingredients, slow_motion}` 视频编辑
   - seed 缺省 -1 = 服务端随机（响应中不回显有效 seed）
-- `mh3`：`inputs.turbo = true`（官方 turbo LoRA 路径，fl2v 系 8 步 / ref2v 4 步，走已下载的 turbo LoRA）
+- `mh3`：`generation.steps` 默认 **20**（int8 基底无 turbo 时的验收质量档；
+  2026-10-09 复盘：基底 4 步会出糊片，旧默认值已修）；`inputs.turbo = true`
+  走官方 turbo LoRA 路径并**强制**标准步数（fl2v 系 8 / ref2v 4，此时传入的
+  steps 被忽略），显式 `steps` 在非 turbo 路径一律被尊重
 - `mh3.fun_control`：`inputs.control_video`（必需，video asset）+ `inputs.control_strength`
   （默认 1.0）；Fun ControlNet-Union patch 支持 canny/depth/pose/hed 控制视频，
   ref2va base，默认 20 步

@@ -64,8 +64,10 @@ def normalize(workflow: str, inputs: dict, generation: dict) -> dict:
         if not inputs.get("control_video"):
             raise ProviderError("mh3.fun_control: control_video asset required")
         assets["control_video"] = inputs["control_video"]
+    # 非 turbo 基底（int8 convrot）默认 20 步——4 步只有配 turbo LoRA 才收敛，
+    # 基底 4 步出糊片（2026-10-09 复盘：form/默认值曾把 steps=4 带给 turbo:false）
     gen = {"width": 768, "height": 416, "duration": 5, "fps": 24,
-           "steps": 20 if workflow in ("fun_control", "multiframe") else 4,
+           "steps": 20,
            "strength": 1.0 if workflow == "fun_control" else 0.7,
            "seed": int(generation.get("seed", -1))}
     if workflow == "fun_control" and inputs.get("control_strength") is not None:
